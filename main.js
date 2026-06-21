@@ -211,8 +211,17 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
       '--ffmpeg-location', ffmpegPath
     );
   } else {
+    let finalFormatId = formatId;
+    if (containerFormat === 'mp4') {
+      // Force m4a (AAC) audio for MP4 to prevent Opus codec errors in Windows players
+      finalFormatId = formatId.replace('bestaudio', 'bestaudio[ext=m4a]');
+    } else if (containerFormat === 'webm') {
+      // Force webm (Opus) audio for WebM
+      finalFormatId = formatId.replace('bestaudio', 'bestaudio[ext=webm]');
+    }
+
     args.push(
-      '-f', formatId,
+      '-f', finalFormatId,
       '--merge-output-format', containerFormat || 'mp4',
       '--ffmpeg-location', ffmpegPath
     );
