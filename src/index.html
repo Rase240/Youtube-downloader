@@ -108,10 +108,22 @@
               <label for="format-type"><i class="fa-solid fa-sliders"></i> Download Type</label>
               <div class="radio-toggle-group">
                 <input type="radio" id="type-video" name="download-type" value="video" checked>
-                <label for="type-video"><i class="fa-solid fa-video"></i> Video (MP4)</label>
+                <label for="type-video"><i class="fa-solid fa-video"></i> Video</label>
 
                 <input type="radio" id="type-audio" name="download-type" value="audio">
                 <label for="type-audio"><i class="fa-solid fa-music"></i> Audio (MP3)</label>
+              </div>
+            </div>
+
+            <!-- Video Format Toggle -->
+            <div class="settings-group" id="video-format-group">
+              <label><i class="fa-solid fa-box"></i> Video Format</label>
+              <div class="radio-toggle-group">
+                <input type="radio" id="format-mp4" name="video-format" value="mp4" checked>
+                <label for="format-mp4">MP4</label>
+
+                <input type="radio" id="format-webm" name="video-format" value="webm">
+                <label for="format-webm">WebM</label>
               </div>
             </div>
 

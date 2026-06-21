@@ -24,6 +24,8 @@ const videoDate = document.getElementById('video-date');
 
 const typeVideo = document.getElementById('type-video');
 const typeAudio = document.getElementById('type-audio');
+const videoFormatGroup = document.getElementById('video-format-group');
+const formatMp4 = document.getElementById('format-mp4');
 const qualitySelect = document.getElementById('quality-select');
 const qualityGroup = document.getElementById('quality-group');
 const savePathInput = document.getElementById('save-path');
@@ -56,11 +58,11 @@ let downloadHistory = JSON.parse(localStorage.getItem('download_history') || '[]
 
 // Quality Formats Config
 const videoFormats = [
-  { name: '1080p Full HD (MP4)', id: 'bestvideo[height<=1080]+bestaudio/best[height<=1080]' },
-  { name: '720p HD (MP4)', id: 'bestvideo[height<=720]+bestaudio/best[height<=720]' },
-  { name: '480p (MP4)', id: 'bestvideo[height<=480]+bestaudio/best[height<=480]' },
-  { name: '360p (MP4)', id: 'bestvideo[height<=360]+bestaudio/best[height<=360]' },
-  { name: '4K Ultra HD (MP4)', id: 'bestvideo[height<=2160]+bestaudio/best[height<=2160]' }
+  { name: '1080p Full HD', id: 'bestvideo[height<=1080]+bestaudio/best[height<=1080]' },
+  { name: '720p HD', id: 'bestvideo[height<=720]+bestaudio/best[height<=720]' },
+  { name: '480p', id: 'bestvideo[height<=480]+bestaudio/best[height<=480]' },
+  { name: '360p', id: 'bestvideo[height<=360]+bestaudio/best[height<=360]' },
+  { name: '4K Ultra HD', id: 'bestvideo[height<=2160]+bestaudio/best[height<=2160]' }
 ];
 
 const audioFormats = [
@@ -130,8 +132,10 @@ function updateQualityOptions() {
   const label = qualityGroup.querySelector('label');
   if (typeVideo.checked) {
     label.innerHTML = '<i class="fa-solid fa-circle-chevron-down"></i> Resolution Quality';
+    videoFormatGroup.classList.remove('hidden');
   } else {
     label.innerHTML = '<i class="fa-solid fa-circle-chevron-down"></i> Audio Bitrate';
+    videoFormatGroup.classList.add('hidden');
   }
 }
 
@@ -221,6 +225,7 @@ downloadBtn.addEventListener('click', () => {
   const url = videoUrlInput.value.trim();
   const formatId = qualitySelect.value;
   const type = typeVideo.checked ? 'video' : 'audio';
+  const containerFormat = formatMp4.checked ? 'mp4' : 'webm';
   const outputFolder = savePathInput.value;
 
   // UI Updates
@@ -235,7 +240,7 @@ downloadBtn.addEventListener('click', () => {
   statEta.textContent = '--:--';
   statSize.textContent = '-- MB';
 
-  window.api.startDownload({ url, formatId, type, outputFolder });
+  window.api.startDownload({ url, formatId, type, containerFormat, outputFolder });
 });
 
 // Download Progress Listeners

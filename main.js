@@ -199,7 +199,7 @@ ipcMain.handle('fetch-info', async (event, url) => {
   });
 });
 
-ipcMain.on('start-download', (event, { url, formatId, type, outputFolder }) => {
+ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, outputFolder }) => {
   const args = [];
   
   if (type === 'audio') {
@@ -213,6 +213,7 @@ ipcMain.on('start-download', (event, { url, formatId, type, outputFolder }) => {
   } else {
     args.push(
       '-f', formatId,
+      '--merge-output-format', containerFormat || 'mp4',
       '--ffmpeg-location', ffmpegPath
     );
   }
