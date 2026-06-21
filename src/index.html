@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YT Downloader Pro</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Load Inter and Outfit fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Load FontAwesome icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+
+  <!-- Background decorative glows -->
+  <div class="glow-bg glow-purple"></div>
+  <div class="glow-bg glow-pink"></div>
+
+  <!-- SETUP SCREEN (Shown during yt-dlp check/download) -->
+  <div id="setup-screen" class="setup-container">
+    <div class="setup-card glass">
+      <div class="app-logo">
+        <i class="fa-brands fa-youtube logo-icon"></i>
+        <span>YT Downloader <span class="accent-text">Pro</span></span>
+      </div>
+      <div id="setup-loader" class="spinner-container">
+        <div class="double-bounce1"></div>
+        <div class="double-bounce2"></div>
+      </div>
+      <h3 id="setup-title">Checking System Components...</h3>
+      <p id="setup-subtitle" class="text-secondary">Please wait while we initialize the downloading engine.</p>
+      
+      <div id="setup-progress-wrapper" class="setup-progress-bar-container hidden">
+        <div class="progress-bar-track">
+          <div id="setup-progress-fill" class="progress-bar-fill" style="width: 0%"></div>
+        </div>
+        <span id="setup-progress-percent" class="percent-label">0%</span>
+      </div>
+
+      <button id="setup-retry-btn" class="btn btn-primary hidden">
+        <i class="fa-solid fa-rotate-right"></i> Retry Setup
+      </button>
+    </div>
+  </div>
+
+  <!-- MAIN APP CONTAINER -->
+  <div id="app-container" class="main-layout hidden">
+    
+    <!-- Sidebar / Top Branding -->
+    <header class="app-header">
+      <div class="app-logo">
+        <i class="fa-brands fa-youtube logo-icon animate-pulse"></i>
+        <span>YT Downloader <span class="accent-text">Pro</span></span>
+      </div>
+      <div class="header-tag">Desktop Edition</div>
+    </header>
+
+    <main class="app-content">
+      
+      <!-- Input Panel -->
+      <section class="card glass search-card">
+        <h2>Download YouTube Videos & Audio</h2>
+        <p class="card-subtitle text-secondary">Paste a link below to analyze and download in high quality.</p>
+        
+        <form id="url-form" class="search-form">
+          <div class="input-group">
+            <i class="fa-solid fa-link input-icon"></i>
+            <input 
+              type="url" 
+              id="video-url" 
+              placeholder="https://www.youtube.com/watch?v=..." 
+              required
+              autocomplete="off"
+            >
+            <button type="submit" id="analyze-btn" class="btn btn-primary">
+              <i class="fa-solid fa-magnifying-glass"></i> Analyze
+            </button>
+          </div>
+        </form>
+        <div id="error-message" class="error-msg hidden"></div>
+      </section>
+
+      <!-- Video Details & Formats Panel (Hidden initially) -->
+      <section id="details-panel" class="card glass details-card hidden">
+        <div class="details-grid">
+          
+          <!-- Column 1: Thumbnail & Metadata -->
+          <div class="video-preview">
+            <div class="thumbnail-wrapper">
+              <img id="video-thumbnail" src="" alt="Video Thumbnail">
+              <span id="video-duration" class="duration-badge">00:00</span>
+            </div>
+            <div class="video-meta">
+              <h3 id="video-title">Video Title</h3>
+              <p id="video-channel" class="text-secondary"><i class="fa-solid fa-circle-check channel-verify"></i> Channel Name</p>
+              <div class="stat-badges">
+                <span id="video-views" class="stat-badge"><i class="fa-solid fa-eye"></i> 0 views</span>
+                <span id="video-date" class="stat-badge"><i class="fa-solid fa-calendar"></i> Date</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Column 2: Selection & Download -->
+          <div class="download-settings">
+            <div class="settings-group">
+              <label for="format-type"><i class="fa-solid fa-sliders"></i> Download Type</label>
+              <div class="radio-toggle-group">
+                <input type="radio" id="type-video" name="download-type" value="video" checked>
+                <label for="type-video"><i class="fa-solid fa-video"></i> Video (MP4)</label>
+
+                <input type="radio" id="type-audio" name="download-type" value="audio">
+                <label for="type-audio"><i class="fa-solid fa-music"></i> Audio (MP3)</label>
+              </div>
+            </div>
+
+            <!-- Quality Select (Swapped dynamically based on video/audio) -->
+            <div class="settings-group" id="quality-group">
+              <label for="quality-select"><i class="fa-solid fa-circle-chevron-down"></i> Resolution Quality</label>
+              <select id="quality-select" class="custom-select">
+                <!-- Loaded dynamically -->
+              </select>
+            </div>
+
+            <!-- Directory Selector -->
+            <div class="settings-group">
+              <label><i class="fa-solid fa-folder-open"></i> Save Location</label>
+              <div class="directory-selector">
+                <input type="text" id="save-path" readonly>
+                <button type="button" id="browse-btn" class="btn btn-secondary">Browse</button>
+              </div>
+            </div>
+
+            <!-- Download Button -->
+            <button id="download-btn" class="btn btn-primary btn-large btn-block">
+              <i class="fa-solid fa-download"></i> Download to Computer
+            </button>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Active Download Progress Panel (Hidden initially) -->
+      <section id="progress-panel" class="card glass progress-card hidden">
+        <div class="progress-info-header">
+          <div class="progress-details">
+            <h3 id="progress-status">Downloading...</h3>
+            <p id="progress-file-title" class="text-secondary truncate">Video Title</p>
+          </div>
+          <button id="cancel-btn" class="btn btn-danger-outline">
+            <i class="fa-solid fa-xmark"></i> Cancel
+          </button>
+        </div>
+
+        <div class="progress-bar-wrapper">
+          <div class="progress-bar-track">
+            <div id="download-progress-fill" class="progress-bar-fill animated-stripe" style="width: 0%"></div>
+          </div>
+          <span id="download-progress-percent" class="percent-label">0%</span>
+        </div>
+
+        <div class="progress-stats-grid">
+          <div class="stat-box">
+            <span class="stat-label">Download Speed</span>
+            <span id="stat-speed" class="stat-value">-- MB/s</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">Estimated Time</span>
+            <span id="stat-eta" class="stat-value">--:--</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">File Size</span>
+            <span id="stat-size" class="stat-value">-- MB</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Complete Section (Hidden initially) -->
+      <section id="complete-panel" class="card glass success-card hidden">
+        <div class="success-icon-wrapper">
+          <i class="fa-solid fa-circle-check animate-scale"></i>
+        </div>
+        <h2>Download Complete!</h2>
+        <p id="complete-message" class="text-secondary">Your file has been saved successfully.</p>
+        
+        <div class="success-actions">
+          <button id="open-file-btn" class="btn btn-primary">
+            <i class="fa-solid fa-folder-open"></i> Show in Folder
+          </button>
+          <button id="reset-btn" class="btn btn-secondary">
+            <i class="fa-solid fa-arrow-rotate-left"></i> Download Another
+          </button>
+        </div>
+      </section>
+
+      <!-- History Panel -->
+      <section class="card glass history-card">
+        <div class="history-header">
+          <h3><i class="fa-solid fa-clock-rotate-left"></i> Recent Downloads</h3>
+          <button id="clear-history-btn" class="btn btn-link hidden">Clear All</button>
+        </div>
+        <div id="history-empty" class="history-empty-state">
+          <i class="fa-solid fa-folder-minus"></i>
+          <p>No recent downloads. Paste a link above to get started!</p>
+        </div>
+        <ul id="history-list" class="history-list">
+          <!-- Loaded dynamically from localStorage -->
+        </ul>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
