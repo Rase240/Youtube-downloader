@@ -2,10 +2,12 @@
   "name": "yt-downloader",
   "version": "1.0.0",
   "description": "Premium YouTube Downloader Desktop App",
+  "author": "YT Downloader",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-packager . \"YT Downloader Pro\" --platform=win32 --arch=x64 --out=dist --overwrite --asar.unpack=\"**/node_modules/ffmpeg-static/**/*\""
+    "dist": "electron-packager . \"YT Downloader Pro\" --platform=win32 --arch=x64 --out=dist --overwrite --asar.unpack=\"**/node_modules/ffmpeg-static/**/*\"",
+    "build": "electron-builder"
   },
   "dependencies": {
     "axios": "^1.7.2",
@@ -13,13 +15,14 @@
   },
   "devDependencies": {
     "electron": "^31.0.1",
+    "electron-builder": "^26.15.3",
     "electron-packager": "^17.1.2"
   },
   "build": {
     "appId": "com.youtube.downloader",
     "productName": "YT Downloader Pro",
     "directories": {
-      "output": "dist"
+      "output": "dist-build"
     },
     "files": [
       "main.js",
