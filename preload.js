@@ -16,9 +16,10 @@ contextBridge.exposeInMainWorld('api', {
   onDownloadComplete: (callback) => ipcRenderer.on('download-complete', (event, data) => callback(data)),
   onDownloadError: (callback) => ipcRenderer.on('download-error', (event, error) => callback(error)),
 
-  // Shell and Dialog actions
+  // Shell, Dialog & File Export actions
   getDefaultPath: () => ipcRenderer.invoke('get-default-path'),
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   openFolder: (path) => ipcRenderer.send('open-folder', path),
-  openFile: (path) => ipcRenderer.send('open-file', path)
+  openFile: (path) => ipcRenderer.send('open-file', path),
+  saveMetadataFile: (data) => ipcRenderer.invoke('save-metadata-file', data)
 });

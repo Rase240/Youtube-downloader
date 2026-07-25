@@ -9,6 +9,8 @@ const setupRetryBtn = document.getElementById('setup-retry-btn');
 const setupLoader = document.getElementById('setup-loader');
 
 const appContainer = document.getElementById('app-container');
+
+// Main Form Elements
 const urlForm = document.getElementById('url-form');
 const videoUrlInput = document.getElementById('video-url');
 const analyzeBtn = document.getElementById('analyze-btn');
@@ -16,6 +18,7 @@ const errorMessage = document.getElementById('error-message');
 
 const detailsPanel = document.getElementById('details-panel');
 const videoThumbnail = document.getElementById('video-thumbnail');
+const videoThumbnailBg = document.getElementById('video-thumbnail-bg');
 const videoDuration = document.getElementById('video-duration');
 const videoTitle = document.getElementById('video-title');
 const videoChannel = document.getElementById('video-channel');
@@ -28,10 +31,12 @@ const videoFormatGroup = document.getElementById('video-format-group');
 const formatMp4 = document.getElementById('format-mp4');
 const qualitySelect = document.getElementById('quality-select');
 const qualityGroup = document.getElementById('quality-group');
+const obfuscateToggle = document.getElementById('obfuscate-toggle');
 const savePathInput = document.getElementById('save-path');
 const browseBtn = document.getElementById('browse-btn');
 const downloadBtn = document.getElementById('download-btn');
 
+// Progress & Complete Panels
 const progressPanel = document.getElementById('progress-panel');
 const progressStatus = document.getElementById('progress-status');
 const progressFileTitle = document.getElementById('progress-file-title');
@@ -54,7 +59,12 @@ const clearHistoryBtn = document.getElementById('clear-history-btn');
 // App State
 let currentVideoData = null;
 let currentFilePath = null;
-let downloadHistory = JSON.parse(localStorage.getItem('download_history') || '[]');
+let downloadHistory = [];
+try {
+  downloadHistory = JSON.parse(localStorage.getItem('download_history') || '[]');
+} catch (e) {
+  downloadHistory = [];
+}
 
 // Quality Formats Config
 const videoFormats = [
@@ -100,11 +110,8 @@ setupRetryBtn.addEventListener('click', () => {
 
 // Setup Main UI Interaction
 async function initializeMainApp() {
-  // Load Default Save Path
   const defaultPath = await window.api.getDefaultPath();
   savePathInput.value = defaultPath;
-  
-  // Render History
   renderHistory();
 }
 
@@ -128,7 +135,6 @@ function updateQualityOptions() {
     qualitySelect.appendChild(opt);
   });
 
-  // Adjust label description
   const label = qualityGroup.querySelector('label');
   if (typeVideo.checked) {
     label.innerHTML = '<i class="fa-solid fa-circle-chevron-down"></i> Resolution Quality';
@@ -180,13 +186,12 @@ function formatDate(dateStr) {
   return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-// Submit Search URL Form
+// Submit Search URL Form (Supports YouTube & Instagram links)
 urlForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const url = videoUrlInput.value.trim();
   if (!url) return;
 
-  // Reset UI
   errorMessage.classList.add('hidden');
   detailsPanel.classList.add('hidden');
   completePanel.classList.add('hidden');
@@ -199,11 +204,15 @@ urlForm.addEventListener('submit', async (e) => {
     const info = await window.api.fetchInfo(url);
     currentVideoData = info;
 
-    // Display Data
-    videoThumbnail.src = info.thumbnail || info.thumbnails?.[0]?.url || '';
+    const thumbUrl = info.thumbnail || info.thumbnails?.[0]?.url || '';
+    videoThumbnail.src = thumbUrl;
+    if (videoThumbnailBg) {
+      videoThumbnailBg.style.backgroundImage = thumbUrl ? `url("${thumbUrl}")` : 'none';
+    }
+
     videoDuration.textContent = formatDuration(info.duration);
-    videoTitle.textContent = info.title || 'Untitled Video';
-    videoChannel.innerHTML = `<i class="fa-solid fa-circle-check channel-verify"></i> ${info.uploader || info.channel || 'Unknown Creator'}`;
+    videoTitle.textContent = info.title || info.description?.slice(0, 60) || 'Untitled Video';
+    videoChannel.innerHTML = `<i class="fa-solid fa-circle-check channel-verify"></i> ${info.uploader || info.channel || 'Creator'}`;
     videoViews.innerHTML = `<i class="fa-solid fa-eye"></i> ${formatViews(info.view_count)} views`;
     videoDate.innerHTML = `<i class="fa-solid fa-calendar"></i> ${formatDate(info.upload_date)}`;
 
@@ -227,20 +236,20 @@ downloadBtn.addEventListener('click', () => {
   const type = typeVideo.checked ? 'video' : 'audio';
   const containerFormat = formatMp4.checked ? 'mp4' : 'webm';
   const outputFolder = savePathInput.value;
+  const obfuscate = obfuscateToggle ? obfuscateToggle.checked : false;
 
-  // UI Updates
   detailsPanel.classList.add('hidden');
   progressPanel.classList.remove('hidden');
 
   progressStatus.textContent = 'Preparing Download...';
-  progressFileTitle.textContent = currentVideoData.title;
+  progressFileTitle.textContent = currentVideoData.title || 'Video Download';
   downloadProgressFill.style.width = '0%';
   downloadProgressPercent.textContent = '0%';
   statSpeed.textContent = '-- MB/s';
   statEta.textContent = '--:--';
   statSize.textContent = '-- MB';
 
-  window.api.startDownload({ url, formatId, type, containerFormat, outputFolder });
+  window.api.startDownload({ url, formatId, type, containerFormat, outputFolder, obfuscate });
 });
 
 // Download Progress Listeners
@@ -273,14 +282,13 @@ window.api.onDownloadComplete(({ filepath }) => {
   if (currentVideoData) {
     const historyItem = {
       id: Date.now().toString(),
-      title: currentVideoData.title,
+      title: currentVideoData.title || 'Downloaded Media',
       type: typeVideo.checked ? 'video' : 'audio',
       filepath: filepath || savePathInput.value,
       timestamp: new Date().toISOString()
     };
     
     downloadHistory.unshift(historyItem);
-    // Limit history to 15 items
     if (downloadHistory.length > 15) {
       downloadHistory.pop();
     }
@@ -361,12 +369,10 @@ function renderHistory() {
       </div>
     `;
 
-    // Click to highlight/show file
     li.querySelector('.btn-open').addEventListener('click', () => {
       window.api.openFile(item.filepath);
     });
 
-    // Delete item from history list
     li.querySelector('.btn-delete').addEventListener('click', () => {
       downloadHistory = downloadHistory.filter(h => h.id !== item.id);
       localStorage.setItem('download_history', JSON.stringify(downloadHistory));

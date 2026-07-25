@@ -199,30 +199,83 @@ ipcMain.handle('fetch-info', async (event, url) => {
   });
 });
 
-ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, outputFolder }) => {
+// FFmpeg Container Metadata & Filename Obfuscation
+function obfuscateVideoMetadata(inputPath) {
+  return new Promise((resolve) => {
+    let cleanInput = (inputPath || '').replace(/^["']|["']$/g, '').trim();
+    if (!fs.existsSync(cleanInput)) {
+      console.error('obfuscateVideoMetadata target file not found:', cleanInput);
+      return resolve(cleanInput);
+    }
+    
+    const ext = path.extname(cleanInput) || '.mp4';
+    const dir = path.dirname(cleanInput);
+    const randomId = Math.floor(10000 + Math.random() * 90000);
+    const randomStr = Math.random().toString(36).substring(2, 10);
+    const outputPath = path.join(dir, `project_${randomId}${ext}`);
+
+    // Random past date (15 mins to 3 days ago)
+    const randomMinutes = Math.floor(15 + Math.random() * 4300);
+    const pastDate = new Date(Date.now() - randomMinutes * 60 * 1000).toISOString();
+
+    const args = [
+      '-y',
+      '-i', cleanInput,
+      '-c', 'copy',
+      '-map_metadata', '-1',
+      '-metadata', `title=Export_${randomId}`,
+      '-metadata', `comment=Rendered_with_${randomStr}`,
+      '-metadata', `creation_time=${pastDate}`
+    ];
+
+    if (ext === '.mp3') {
+      args.push('-id3v2_version', '3');
+    }
+
+    args.push(outputPath);
+
+    console.log('[FFmpeg Obfuscate] Command:', ffmpegPath, args.join(' '));
+    const child = spawn(ffmpegPath, args);
+    child.on('close', (code) => {
+      if (code === 0 && fs.existsSync(outputPath)) {
+        try { fs.unlinkSync(cleanInput); } catch(e) {}
+        console.log('[FFmpeg Obfuscate] Successfully created obfuscated video:', outputPath);
+        resolve(outputPath);
+      } else {
+        console.error('[FFmpeg Obfuscate] Failed with exit code:', code);
+        resolve(cleanInput);
+      }
+    });
+    child.on('error', (err) => {
+      console.error('[FFmpeg Obfuscate] Process error:', err);
+      resolve(cleanInput);
+    });
+  });
+}
+
+ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, outputFolder, obfuscate }) => {
   const args = [];
   
   if (type === 'audio') {
     args.push(
-      '-f', 'bestaudio',
+      '-f', 'bestaudio/best',
       '-x',
       '--audio-format', 'mp3',
       '--audio-quality', '0',
+      '--restrict-filenames',
+      '--no-warnings',
       '--ffmpeg-location', ffmpegPath
     );
   } else {
-    let finalFormatId = formatId;
-    if (containerFormat === 'mp4') {
-      // Force m4a (AAC) audio for MP4 to prevent Opus codec errors in Windows players
-      finalFormatId = formatId.replace('bestaudio', 'bestaudio[ext=m4a]');
-    } else if (containerFormat === 'webm') {
-      // Force webm (Opus) audio for WebM
-      finalFormatId = formatId.replace('bestaudio', 'bestaudio[ext=webm]');
-    }
+    let requestedFormat = formatId || 'bestvideo+bestaudio/best';
+    // Robust format fallback string to prevent "Requested format not available" errors
+    let finalFormatId = `${requestedFormat}/${requestedFormat.replace('[ext=m4a]', '')}/bestvideo+bestaudio/best`;
 
     args.push(
       '-f', finalFormatId,
       '--merge-output-format', containerFormat || 'mp4',
+      '--restrict-filenames',
+      '--no-warnings',
       '--ffmpeg-location', ffmpegPath
     );
   }
@@ -244,12 +297,12 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
     const destMatch = text.match(/Destination:\s*(.+)$/m);
     const audioDestMatch = text.match(/\[ExtractAudio\] Destination:\s*(.+)$/m);
     const alreadyMatch = text.match(/\[download\]\s*(.+?)\s*has already been downloaded/);
-    const mergeMatch = text.match(/Merging formats into\s*["']?([^"'\n]+)["']?/);
+    const mergeMatch = text.match(/Merging formats into\s*["']?([^"'\r\n]+)["']?/);
 
-    if (destMatch) filepath = destMatch[1].trim();
-    if (audioDestMatch) filepath = audioDestMatch[1].trim();
-    if (alreadyMatch) filepath = alreadyMatch[1].trim();
-    if (mergeMatch) filepath = mergeMatch[1].trim();
+    if (destMatch) filepath = destMatch[1].replace(/^["']|["']$/g, '').trim();
+    if (audioDestMatch) filepath = audioDestMatch[1].replace(/^["']|["']$/g, '').trim();
+    if (alreadyMatch) filepath = alreadyMatch[1].replace(/^["']|["']$/g, '').trim();
+    if (mergeMatch) filepath = mergeMatch[1].replace(/^["']|["']$/g, '').trim();
 
     // Extract progress data
     if (text.includes('[download]')) {
@@ -278,9 +331,35 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
     console.error('[yt-dlp stderr]:', data.toString());
   });
 
-  currentDownloadProcess.on('close', (code) => {
+  currentDownloadProcess.on('close', async (code) => {
     if (code === 0) {
-      event.reply('download-complete', { filepath });
+      let cleanPath = (filepath || '').replace(/^["']|["']$/g, '').trim();
+      
+      // Fallback: If cleanPath doesn't exist or is empty, find newest file in outputFolder
+      if (!cleanPath || !fs.existsSync(cleanPath)) {
+        try {
+          const files = fs.readdirSync(outputFolder)
+            .map(f => path.join(outputFolder, f))
+            .filter(f => fs.statSync(f).isFile() && !f.endsWith('.part') && !f.endsWith('.ytdl'))
+            .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+          
+          if (files.length > 0) {
+            cleanPath = files[0];
+          }
+        } catch(e) {
+          console.error('Error finding newest downloaded file:', e);
+        }
+      }
+
+      console.log('Target cleanPath for obfuscation:', cleanPath, 'obfuscate flag:', obfuscate);
+
+      if (obfuscate && cleanPath && fs.existsSync(cleanPath)) {
+        event.reply('download-progress', { status: 'Randomizing container metadata & project filename...' });
+        const obfuscatedPath = await obfuscateVideoMetadata(cleanPath);
+        event.reply('download-complete', { filepath: obfuscatedPath });
+      } else {
+        event.reply('download-complete', { filepath: cleanPath });
+      }
     } else {
       event.reply('download-error', 'Download was interrupted or encountered an error.');
     }
@@ -305,4 +384,21 @@ ipcMain.on('open-file', (event, filePath) => {
   if (fs.existsSync(filePath)) {
     shell.showItemInFolder(filePath);
   }
+});
+
+ipcMain.handle('save-metadata-file', async (event, { content, filename, defaultPath }) => {
+  const saveResult = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export Metadata File',
+    defaultPath: path.join(defaultPath || app.getPath('downloads'), filename || 'instagram_metadata.json'),
+    filters: [
+      { name: 'JSON Metadata', extensions: ['json'] },
+      { name: 'Text File', extensions: ['txt'] }
+    ]
+  });
+
+  if (!saveResult.canceled && saveResult.filePath) {
+    fs.writeFileSync(saveResult.filePath, content, 'utf-8');
+    return saveResult.filePath;
+  }
+  return null;
 });

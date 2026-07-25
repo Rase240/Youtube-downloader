@@ -10,11 +10,16 @@
     "build": "electron-builder"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/cli": "^8.4.2",
+    "@capacitor/core": "^8.4.2",
     "axios": "^1.7.2",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
     "ffmpeg-static": "^5.2.0"
   },
   "devDependencies": {
-    "electron": "^31.0.1",
+    "electron": "^31.7.7",
     "electron-builder": "^26.15.3",
     "electron-packager": "^17.1.2"
   },

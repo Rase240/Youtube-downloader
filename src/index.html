@@ -61,7 +61,7 @@
       
       <!-- Input Panel -->
       <section class="card glass search-card">
-        <h2>Download YouTube Videos & Audio</h2>
+        <h2>Download YouTube & Instagram Videos</h2>
         <p class="card-subtitle text-secondary">Paste a link below to analyze and download in high quality.</p>
         
         <form id="url-form" class="search-form">
@@ -70,7 +70,7 @@
             <input 
               type="url" 
               id="video-url" 
-              placeholder="https://www.youtube.com/watch?v=..." 
+              placeholder="https://www.youtube.com/watch?v=... or https://www.instagram.com/reel/..." 
               required
               autocomplete="off"
             >
@@ -89,6 +89,7 @@
           <!-- Column 1: Thumbnail & Metadata -->
           <div class="video-preview">
             <div class="thumbnail-wrapper">
+              <div id="video-thumbnail-bg" class="thumbnail-blur-bg"></div>
               <img id="video-thumbnail" src="" alt="Video Thumbnail">
               <span id="video-duration" class="duration-badge">00:00</span>
             </div>
@@ -133,6 +134,18 @@
               <select id="quality-select" class="custom-select">
                 <!-- Loaded dynamically -->
               </select>
+            </div>
+
+            <!-- Anti-Algorithm Metadata Obfuscation Toggle -->
+            <div class="settings-group">
+              <label class="toggle-option-box">
+                <div class="toggle-option-info">
+                  <span class="toggle-option-title"><i class="fa-solid fa-user-shield"></i> Anti-Algorithm Obfuscation</span>
+                  <span class="toggle-option-desc">Strips original metadata & renames to project_XXXX.mp4</span>
+                </div>
+                <input type="checkbox" id="obfuscate-toggle" class="toggle-input" checked>
+                <span class="toggle-slider"></span>
+              </label>
             </div>
 
             <!-- Directory Selector -->
