@@ -165,9 +165,6 @@ window.api.onSetupStatus((data) => {
     _appInitialized = true;
     if (setupScreen) setupScreen.classList.add('hidden');
     if (appContainer) appContainer.classList.remove('hidden');
-    // Tag mobile vs desktop
-    const headerTag = document.querySelector('.header-tag');
-    if (headerTag && !window.electronAPI) headerTag.textContent = 'Mobile Edition';
     initializeMainApp();
   } else if (data.stage === 'error') {
     if (setupLoader) setupLoader.classList.add('hidden');
