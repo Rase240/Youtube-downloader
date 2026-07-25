@@ -211,23 +211,45 @@ if (pasteBtn) {
   });
 }
 
-// Mobile Bottom Nav Tab Listeners
+// Mobile Bottom Nav Tab Listeners & View Switcher
 const navDownloaderBtn = document.getElementById('nav-downloader-btn');
 const navHistoryBtn = document.getElementById('nav-history-btn');
 const historyPanel = document.getElementById('history-panel');
 const searchCard = document.querySelector('.search-card');
 
+function setMobileTab(tab) {
+  const isMobile = window.innerWidth <= 600;
+  if (!isMobile) return;
+
+  if (tab === 'history') {
+    if (searchCard) searchCard.style.display = 'none';
+    if (detailsPanel) detailsPanel.style.display = 'none';
+    if (progressPanel) progressPanel.style.display = 'none';
+    if (completePanel) completePanel.style.display = 'none';
+    if (historyPanel) {
+      historyPanel.style.display = 'block';
+      historyPanel.classList.remove('hidden');
+    }
+  } else {
+    if (searchCard) searchCard.style.display = '';
+    if (detailsPanel && !detailsPanel.classList.contains('hidden')) detailsPanel.style.display = '';
+    if (progressPanel && !progressPanel.classList.contains('hidden')) progressPanel.style.display = '';
+    if (completePanel && !completePanel.classList.contains('hidden')) completePanel.style.display = '';
+    if (historyPanel) historyPanel.style.display = '';
+  }
+}
+
 if (navDownloaderBtn && navHistoryBtn) {
   navDownloaderBtn.addEventListener('click', () => {
     navDownloaderBtn.classList.add('active');
     navHistoryBtn.classList.remove('active');
-    if (searchCard) searchCard.scrollIntoView({ behavior: 'smooth' });
+    setMobileTab('downloader');
   });
 
   navHistoryBtn.addEventListener('click', () => {
     navHistoryBtn.classList.add('active');
     navDownloaderBtn.classList.remove('active');
-    if (historyPanel) historyPanel.scrollIntoView({ behavior: 'smooth' });
+    setMobileTab('history');
   });
 }
 
