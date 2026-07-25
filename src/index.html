@@ -12,6 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <!-- Load FontAwesome icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="icon" type="image/png" href="assets/icon.png">
 </head>
 <body>
 
@@ -23,7 +24,7 @@
   <div id="setup-screen" class="setup-container">
     <div class="setup-card glass">
       <div class="app-logo">
-        <i class="fa-brands fa-youtube logo-icon"></i>
+        <img src="assets/icon.png" class="app-logo-img" alt="YT Downloader Pro Icon">
         <span>YT Downloader <span class="accent-text">Pro</span></span>
       </div>
       <div id="setup-loader" class="spinner-container">
@@ -52,7 +53,7 @@
     <!-- Sidebar / Top Branding -->
     <header class="app-header">
       <div class="app-logo">
-        <i class="fa-brands fa-youtube logo-icon animate-pulse"></i>
+        <img src="assets/icon.png" class="app-logo-img animate-pulse" alt="YT Downloader Pro Icon">
         <span>YT Downloader <span class="accent-text">Pro</span></span>
       </div>
       <div class="header-tag">Desktop Edition</div>
@@ -264,9 +265,6 @@
 
     </main>
 
-    <footer style="text-align: center; padding: 1.5rem 0 0.5rem; opacity: 0.3; font-size: 0.72rem; color: var(--text-muted); letter-spacing: 0.03em;">
-      Built with <i class="fa-solid fa-shield-halved" style="color: #8b5cf6;"></i> Anti-Algorithm Technology
-    </footer>
   </div>
 
   <script src="renderer.js"></script>
