@@ -141,14 +141,14 @@ if (!window.api) {
         console.warn('[Mobile Engine] oEmbed fetch fallback:', err);
       }
 
-      // 3. Direct YouTube CDN thumbnail fallback using real Video ID
+      // 3. Direct YouTube CDN thumbnail fallback using real Video ID, or Generic Fallback
       return {
-        title: ytId ? `YouTube Video (${ytId})` : 'Media Video (Obfuscated)',
-        uploader: 'YouTube Creator',
-        duration: 180,
-        view_count: 98000,
-        upload_date: '20260725',
-        thumbnail: ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : 'https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg'
+        title: ytId ? `YouTube Video (${ytId})` : 'Generic Media Video',
+        uploader: ytId ? 'YouTube Creator' : 'Unknown Creator',
+        duration: 0,
+        view_count: 0,
+        upload_date: 'Unknown',
+        thumbnail: ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : 'assets/icon.png' // Use app icon as fallback instead of Rick Astley
       };
     },
     startDownload: async (opts) => {
