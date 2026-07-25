@@ -100,6 +100,8 @@ if (!window.api) {
     },
     getDefaultPath: async () => 'Downloads/YT-Obfuscated',
     selectDirectory: async () => 'Downloads/YT-Obfuscated',
+    openFile: (path) => alert(`File saved to ${path}`),
+    openFolder: (path) => alert(`Check your ${path} folder for the downloads.`),
     fetchInfo: async (url) => {
       // 1. Try backend server if available
       try {
@@ -538,13 +540,21 @@ openFileBtn.addEventListener('click', () => {
 
 // Copy File Path Button
 if (copyPathBtn) {
-  copyPathBtn.addEventListener('click', () => {
+  copyPathBtn.addEventListener('click', async () => {
     if (currentFilePath) {
-      navigator.clipboard.writeText(currentFilePath);
-      copyPathBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
-      setTimeout(() => {
-        copyPathBtn.innerHTML = '<i class="fa-solid fa-copy"></i> Copy File Path';
-      }, 2000);
+      try {
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Clipboard) {
+          await window.Capacitor.Plugins.Clipboard.write({ string: currentFilePath });
+        } else {
+          await navigator.clipboard.writeText(currentFilePath);
+        }
+        copyPathBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
+        setTimeout(() => {
+          copyPathBtn.innerHTML = '<i class="fa-solid fa-copy"></i> Copy File Path';
+        }, 2000);
+      } catch (e) {
+        console.error('Failed to copy path', e);
+      }
     }
   });
 }
