@@ -194,6 +194,111 @@ function updateQualityOptions() {
 typeVideo.addEventListener('change', updateQualityOptions);
 typeAudio.addEventListener('change', updateQualityOptions);
 
+// Convert Seconds to HH:MM:SS
+function formatDuration(sec) {
+  if (!sec) return '00:00';
+  const hrs = Math.floor(sec / 3600);
+  const mins = Math.floor((sec % 3600) / 60);
+  const secs = Math.floor(sec % 60);
+  
+  if (hrs > 0) {
+    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+// Convert Views to Compact String
+function formatViews(num) {
+  if (!num) return '0';
+  if (num >= 1000000000) {
+    return (num / 1000000000).toFixed(1).replace(/\.0$/, '') + 'B';
+  }
+  if (num >= 1000000) {
+    return (num / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+  }
+  if (num >= 1000) {
+    return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+  }
+  return num.toString();
+}
+
+// Format Date
+function formatDate(dateStr) {
+  if (!dateStr || dateStr.length !== 8) return 'Unknown Date';
+  const year = dateStr.substring(0, 4);
+  const month = dateStr.substring(4, 6);
+  const day = dateStr.substring(6, 8);
+  const date = new Date(`${year}-${month}-${day}`);
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+// Submit Search URL Form (Supports YouTube & Instagram links)
+urlForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const url = videoUrlInput.value.trim();
+  if (!url) return;
+
+  errorMessage.classList.add('hidden');
+  detailsPanel.classList.add('hidden');
+  completePanel.classList.add('hidden');
+  progressPanel.classList.add('hidden');
+
+  analyzeBtn.disabled = true;
+  analyzeBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Analyzing...';
+
+  try {
+    const info = await window.api.fetchInfo(url);
+    currentVideoData = info;
+
+    const thumbUrl = info.thumbnail || info.thumbnails?.[0]?.url || '';
+    videoThumbnail.src = thumbUrl;
+    if (videoThumbnailBg) {
+      videoThumbnailBg.style.backgroundImage = thumbUrl ? `url("${thumbUrl}")` : 'none';
+    }
+
+    videoDuration.textContent = formatDuration(info.duration);
+    videoTitle.textContent = info.title || info.description?.slice(0, 60) || 'Untitled Video';
+    videoChannel.innerHTML = `<i class="fa-solid fa-circle-check channel-verify"></i> ${info.uploader || info.channel || 'Creator'}`;
+    videoViews.innerHTML = `<i class="fa-solid fa-eye"></i> ${formatViews(info.view_count)} views`;
+    videoDate.innerHTML = `<i class="fa-solid fa-calendar"></i> ${formatDate(info.upload_date)}`;
+
+    updateQualityOptions();
+    detailsPanel.classList.remove('hidden');
+  } catch (err) {
+    errorMessage.textContent = err.message || 'An error occurred while fetching video info.';
+    errorMessage.classList.remove('hidden');
+  } finally {
+    analyzeBtn.disabled = false;
+    analyzeBtn.innerHTML = '<i class="fa-solid fa-magnifying-glass"></i> Analyze';
+  }
+});
+
+// Trigger Download Flow
+downloadBtn.addEventListener('click', () => {
+  if (!currentVideoData) return;
+
+  const url = videoUrlInput.value.trim();
+  const formatId = qualitySelect.value;
+  const type = typeVideo.checked ? 'video' : 'audio';
+  const containerFormat = formatMp4.checked ? 'mp4' : 'webm';
+  const outputFolder = savePathInput.value;
+  const obfuscate = obfuscateToggle ? obfuscateToggle.checked : false;
+
+  detailsPanel.classList.add('hidden');
+  progressPanel.classList.remove('hidden');
+
+  progressStatus.textContent = 'Preparing Download...';
+  progressFileTitle.textContent = currentVideoData.title || 'Video Download';
+  downloadProgressFill.style.width = '0%';
+  downloadProgressPercent.textContent = '0%';
+  setProgressRing(0);
+  statSpeed.textContent = '-- MB/s';
+  statEta.textContent = '--:--';
+  statSize.textContent = '-- MB';
+
+  window.api.startDownload({ url, formatId, type, containerFormat, outputFolder, obfuscate });
+});
+
 // SVG Progress Ring Circumference (r=32 -> 2 * PI * 32 = 201.06)
 const ringCircumference = 201.06;
 
