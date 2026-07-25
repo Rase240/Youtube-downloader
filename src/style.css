@@ -612,6 +612,7 @@ html.is-mobile-app #app-container {
   line-height: 1.45;
   color: var(--text-primary);
   display: -webkit-box;
+  line-clamp: 2;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
