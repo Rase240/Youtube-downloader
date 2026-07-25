@@ -12,7 +12,7 @@ const binDir = path.join(userDataPath, 'bin');
 const isWin = process.platform === 'win32';
 const ytdlpFilename = isWin ? 'yt-dlp.exe' : 'yt-dlp';
 const ytdlpPath = path.join(binDir, ytdlpFilename);
-const ytdlpUrl = isWin 
+const ytdlpUrl = isWin
   ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
   : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
 
@@ -24,6 +24,12 @@ if (app.isPackaged) {
 
 let mainWindow = null;
 let currentDownloadProcess = null;
+
+function safeSend(channel, data) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, data);
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -52,6 +58,7 @@ function createWindow() {
     mainWindow = null;
     if (currentDownloadProcess) {
       currentDownloadProcess.kill();
+      currentDownloadProcess = null;
     }
   });
 }
@@ -76,12 +83,16 @@ async function ensureYtdlp(win) {
 
   if (fs.existsSync(ytdlpPath)) {
     win.webContents.send('setup-status', { stage: 'ready', message: 'Ready to download' });
-    
+
     // Check for updates in background to keep yt-dlp fresh
     exec(`"${ytdlpPath}" --version`, (err) => {
       if (err) {
         // Core corrupted or invalid, force redownload
-        fs.unlinkSync(ytdlpPath);
+        try {
+          fs.unlinkSync(ytdlpPath);
+        } catch (e) {
+          console.error('Failed to remove corrupted yt-dlp binary:', e);
+        }
         downloadYtdlp(win);
       } else {
         // Run yt-dlp update check in background
@@ -97,7 +108,7 @@ async function ensureYtdlp(win) {
 
 async function downloadYtdlp(win) {
   win.webContents.send('setup-status', { stage: 'loading', message: 'Downloading yt-dlp engine...', percent: 0 });
-  
+
   try {
     const response = await axios({
       method: 'get',
@@ -105,13 +116,15 @@ async function downloadYtdlp(win) {
       responseType: 'stream'
     });
 
-    const totalLength = parseInt(response.headers['content-length'], 10) || 15000000;
+    const totalLength = parseInt(response.headers['content-length'], 10) || 0;
     let downloadedLength = 0;
     const writer = fs.createWriteStream(ytdlpPath);
 
     response.data.on('data', (chunk) => {
       downloadedLength += chunk.length;
-      const percent = Math.round((downloadedLength / totalLength) * 100);
+      const percent = totalLength
+        ? Math.min(99, Math.round((downloadedLength / totalLength) * 100))
+        : undefined;
       win.webContents.send('setup-status', { stage: 'loading', message: 'Downloading yt-dlp engine...', percent });
     });
 
@@ -126,7 +139,12 @@ async function downloadYtdlp(win) {
         resolve();
       });
       writer.on('error', (err) => {
-        try { fs.unlinkSync(ytdlpPath); } catch(e) {}
+        try { fs.unlinkSync(ytdlpPath); } catch (e) { }
+        win.webContents.send('setup-status', { stage: 'error', message: 'Download failed. Retrying...' });
+        reject(err);
+      });
+      response.data.on('error', (err) => {
+        try { fs.unlinkSync(ytdlpPath); } catch (e) { }
         win.webContents.send('setup-status', { stage: 'error', message: 'Download failed. Retrying...' });
         reject(err);
       });
@@ -168,10 +186,16 @@ ipcMain.handle('select-directory', async () => {
 
 ipcMain.handle('fetch-info', async (event, url) => {
   return new Promise((resolve, reject) => {
+    if (!fs.existsSync(ytdlpPath)) {
+      reject(new Error('yt-dlp is not installed yet. Please wait for setup to finish.'));
+      return;
+    }
+
     // Run yt-dlp -j to dump metadata
     const child = spawn(ytdlpPath, ['-j', url]);
     let stdoutData = '';
     let stderrData = '';
+    let settled = false;
 
     child.stdout.on('data', (data) => {
       stdoutData += data.toString();
@@ -181,7 +205,15 @@ ipcMain.handle('fetch-info', async (event, url) => {
       stderrData += data.toString();
     });
 
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`Failed to start yt-dlp: ${err.message}`));
+    });
+
     child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
       if (code === 0) {
         try {
           const info = JSON.parse(stdoutData);
@@ -200,63 +232,65 @@ ipcMain.handle('fetch-info', async (event, url) => {
   });
 });
 
-// FFmpeg Container Metadata & Filename Obfuscation
-function obfuscateVideoMetadata(inputPath) {
+// FFmpeg container metadata sanitization (privacy: strip embedded metadata
+// such as device/location info before the file is shared elsewhere).
+function sanitizeVideoMetadata(inputPath) {
   return new Promise((resolve) => {
     let cleanInput = (inputPath || '').replace(/^["']|["']$/g, '').trim();
     if (!fs.existsSync(cleanInput)) {
-      console.error('obfuscateVideoMetadata target file not found:', cleanInput);
+      console.error('sanitizeVideoMetadata target file not found:', cleanInput);
       return resolve(cleanInput);
     }
-    
+
     const ext = path.extname(cleanInput) || '.mp4';
     const dir = path.dirname(cleanInput);
-    const randomId = Math.floor(10000 + Math.random() * 90000);
-    const randomStr = Math.random().toString(36).substring(2, 10);
-    const outputPath = path.join(dir, `project_${randomId}${ext}`);
-
-    // Random past date (15 mins to 3 days ago)
-    const randomMinutes = Math.floor(15 + Math.random() * 4300);
-    const pastDate = new Date(Date.now() - randomMinutes * 60 * 1000).toISOString();
+    const base = path.basename(cleanInput, ext);
+    const outputPath = path.join(dir, `${base}_clean${ext}`);
 
     const args = [
       '-y',
       '-i', cleanInput,
       '-c', 'copy',
       '-map_metadata', '-1',
-      '-metadata', `title=Export_${randomId}`,
-      '-metadata', `comment=Rendered_with_${randomStr}`,
-      '-metadata', `creation_time=${pastDate}`
+      outputPath
     ];
 
     if (ext === '.mp3') {
       args.push('-id3v2_version', '3');
     }
 
-    args.push(outputPath);
-
-    console.log('[FFmpeg Obfuscate] Command:', ffmpegPath, args.join(' '));
+    console.log('[FFmpeg Sanitize] Command:', ffmpegPath, args.join(' '));
     const child = spawn(ffmpegPath, args);
     child.on('close', (code) => {
       if (code === 0 && fs.existsSync(outputPath)) {
-        try { fs.unlinkSync(cleanInput); } catch(e) {}
-        console.log('[FFmpeg Obfuscate] Successfully created obfuscated video:', outputPath);
+        try { fs.unlinkSync(cleanInput); } catch (e) { }
+        console.log('[FFmpeg Sanitize] Successfully created sanitized video:', outputPath);
         resolve(outputPath);
       } else {
-        console.error('[FFmpeg Obfuscate] Failed with exit code:', code);
+        console.error('[FFmpeg Sanitize] Failed with exit code:', code);
         resolve(cleanInput);
       }
     });
     child.on('error', (err) => {
-      console.error('[FFmpeg Obfuscate] Process error:', err);
+      console.error('[FFmpeg Sanitize] Process error:', err);
       resolve(cleanInput);
     });
   });
 }
 
 ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, outputFolder, obfuscate }) => {
+  if (!fs.existsSync(ytdlpPath)) {
+    event.reply('download-error', 'yt-dlp is not installed yet. Please wait for setup to finish.');
+    return;
+  }
+
+  if (currentDownloadProcess) {
+    event.reply('download-error', 'A download is already in progress.');
+    return;
+  }
+
   const args = [];
-  
+
   if (type === 'audio') {
     args.push(
       '-f', 'bestaudio/best',
@@ -287,10 +321,11 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
   args.push(url);
 
   // Spawn download process
-  currentDownloadProcess = spawn(ytdlpPath, args);
+  const child = spawn(ytdlpPath, args);
+  currentDownloadProcess = child;
   let filepath = '';
 
-  currentDownloadProcess.stdout.on('data', (data) => {
+  child.stdout.on('data', (data) => {
     const text = data.toString();
     console.log('[yt-dlp stdout]:', text);
 
@@ -328,14 +363,26 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
     }
   });
 
-  currentDownloadProcess.stderr.on('data', (data) => {
+  child.stderr.on('data', (data) => {
     console.error('[yt-dlp stderr]:', data.toString());
   });
 
-  currentDownloadProcess.on('close', async (code) => {
+  child.on('error', (err) => {
+    if (currentDownloadProcess !== child) return;
+    currentDownloadProcess = null;
+    event.reply('download-error', `Failed to start yt-dlp: ${err.message}`);
+  });
+
+  child.on('close', async (code) => {
+    // Guard against a stale process (e.g. a previous download) clobbering
+    // the reference for a newer one.
+    if (currentDownloadProcess === child) {
+      currentDownloadProcess = null;
+    }
+
     if (code === 0) {
       let cleanPath = (filepath || '').replace(/^["']|["']$/g, '').trim();
-      
+
       // Fallback: If cleanPath doesn't exist or is empty, find newest file in outputFolder
       if (!cleanPath || !fs.existsSync(cleanPath)) {
         try {
@@ -343,28 +390,27 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
             .map(f => path.join(outputFolder, f))
             .filter(f => fs.statSync(f).isFile() && !f.endsWith('.part') && !f.endsWith('.ytdl'))
             .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-          
+
           if (files.length > 0) {
             cleanPath = files[0];
           }
-        } catch(e) {
+        } catch (e) {
           console.error('Error finding newest downloaded file:', e);
         }
       }
 
-      console.log('Target cleanPath for obfuscation:', cleanPath, 'obfuscate flag:', obfuscate);
+      console.log('Target cleanPath for sanitization:', cleanPath, 'obfuscate flag:', obfuscate);
 
       if (obfuscate && cleanPath && fs.existsSync(cleanPath)) {
-        event.reply('download-progress', { status: 'Randomizing container metadata & project filename...' });
-        const obfuscatedPath = await obfuscateVideoMetadata(cleanPath);
-        event.reply('download-complete', { filepath: obfuscatedPath });
+        event.reply('download-progress', { status: 'Stripping embedded metadata...' });
+        const sanitizedPath = await sanitizeVideoMetadata(cleanPath);
+        event.reply('download-complete', { filepath: sanitizedPath });
       } else {
         event.reply('download-complete', { filepath: cleanPath });
       }
     } else {
       event.reply('download-error', 'Download was interrupted or encountered an error.');
     }
-    currentDownloadProcess = null;
   });
 });
 
