@@ -156,26 +156,33 @@ if (!window.api) {
     },
     startDownload: async (opts) => {
       try {
-        window.api._notifyProgress({ status: 'Connecting to Mobile Download Server...', percent: 10 });
-        const res = await fetch(`${API_SERVER}/api/download`, {
+        window.api._notifyProgress({ status: 'Connecting to Desktop Companion Server...', percent: 10 });
+        const host = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
+        const res = await fetch(`${host}/api/download`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(opts)
         });
         const data = await res.json();
-        if (data.success) {
-          window.api._notifyProgress({ status: 'Finalizing obfuscated file...', percent: 100 });
+        if (data.success && data.downloadUrl) {
+          window.api._notifyProgress({ status: 'Downloading file to your device...', percent: 100 });
+          
+          // Trigger actual native download to phone's filesystem
+          const downloadLink = document.createElement('a');
+          downloadLink.href = `${host}${data.downloadUrl}`;
+          downloadLink.download = data.filename || 'download.mp4';
+          document.body.appendChild(downloadLink);
+          downloadLink.click();
+          document.body.removeChild(downloadLink);
+          
           setTimeout(() => {
-            window.api._notifyComplete({ filepath: data.filename || 'project_58291.mp4' });
-          }, 500);
+            window.api._notifyComplete({ filepath: data.filename });
+          }, 1500);
         } else {
-          window.api._notifyError('Mobile download server error.');
+          window.api._notifyError('Companion server failed to process the video.');
         }
       } catch (err) {
-        window.api._notifyProgress({ status: 'Processing Anti-Algorithm metadata...', percent: 100 });
-        setTimeout(() => {
-          window.api._notifyComplete({ filepath: 'project_74921.mp4' });
-        }, 1200);
+        window.api._notifyError('Cannot connect to Desktop Companion Server. Please ensure you are running the backend on your PC (node server.js).');
       }
     },
     cancelDownload: () => {},
