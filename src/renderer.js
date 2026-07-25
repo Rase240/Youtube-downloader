@@ -81,23 +81,22 @@ const audioFormats = [
   { name: 'MP3 Audio (Standard Quality - 128kbps)', id: 'bestaudio' }
 ];
 
-// Safe API Bridge Initialization (Desktop Electron vs Mobile Capacitor Fallback)
+// Guard flag to prevent double initialization
+let _appInitialized = false;
+
+// Safe API Bridge (Mobile Capacitor Fallback — fires when window.api is absent)
 if (!window.api) {
-  console.log('[Mobile Engine] Initializing mobile fallback API bridge...');
+  console.log('[Mobile] No Electron bridge — initializing mobile API...');
   const API_SERVER = 'http://localhost:3000';
-  
+
   window.api = {
     onSetupStatus: (cb) => {
-      // Auto-signal ready on mobile instantly
-      setTimeout(() => cb({ stage: 'ready', message: 'Ready' }), 100);
+      // Skip setup screen on mobile — go straight to main UI
+      requestAnimationFrame(() => cb({ stage: 'ready' }));
     },
     retrySetup: () => {},
     appLoaded: () => {
-      setupScreen.classList.add('hidden');
-      appContainer.classList.remove('hidden');
-      const headerTag = document.querySelector('.header-tag');
-      if (headerTag) headerTag.textContent = 'Mobile Edition';
-      initializeMainApp();
+      // On mobile, appLoaded is a no-op (init happens via onSetupStatus)
     },
     getDefaultPath: async () => 'Downloads/YT-Obfuscated',
     selectDirectory: async () => 'Downloads/YT-Obfuscated',
@@ -151,26 +150,31 @@ if (!window.api) {
   };
 }
 
-// Initial Startup Check
+// Startup Handler
 window.api.onSetupStatus((data) => {
   if (data.stage === 'loading') {
-    setupLoader.classList.remove('hidden');
-    setupProgressWrapper.classList.remove('hidden');
-    setupRetryBtn.classList.add('hidden');
-    setupTitle.textContent = data.message;
-    setupSubtitle.textContent = 'Please wait while we prepare core binaries.';
-    setupProgressFill.style.width = `${data.percent}%`;
-    setupProgressPercent.textContent = `${data.percent}%`;
+    if (setupLoader) setupLoader.classList.remove('hidden');
+    if (setupProgressWrapper) setupProgressWrapper.classList.remove('hidden');
+    if (setupRetryBtn) setupRetryBtn.classList.add('hidden');
+    if (setupTitle) setupTitle.textContent = data.message || 'Loading...';
+    if (setupSubtitle) setupSubtitle.textContent = 'Please wait while we prepare core binaries.';
+    if (setupProgressFill) setupProgressFill.style.width = `${data.percent || 0}%`;
+    if (setupProgressPercent) setupProgressPercent.textContent = `${data.percent || 0}%`;
   } else if (data.stage === 'ready') {
-    setupScreen.classList.add('hidden');
-    appContainer.classList.remove('hidden');
+    if (_appInitialized) return; // Guard: prevent double init
+    _appInitialized = true;
+    if (setupScreen) setupScreen.classList.add('hidden');
+    if (appContainer) appContainer.classList.remove('hidden');
+    // Tag mobile vs desktop
+    const headerTag = document.querySelector('.header-tag');
+    if (headerTag && !window.electronAPI) headerTag.textContent = 'Mobile Edition';
     initializeMainApp();
   } else if (data.stage === 'error') {
-    setupLoader.classList.add('hidden');
-    setupProgressWrapper.classList.add('hidden');
-    setupRetryBtn.classList.remove('hidden');
-    setupTitle.textContent = 'Setup Failed';
-    setupSubtitle.textContent = data.message;
+    if (setupLoader) setupLoader.classList.add('hidden');
+    if (setupProgressWrapper) setupProgressWrapper.classList.add('hidden');
+    if (setupRetryBtn) setupRetryBtn.classList.remove('hidden');
+    if (setupTitle) setupTitle.textContent = 'Setup Failed';
+    if (setupSubtitle) setupSubtitle.textContent = data.message || 'An error occurred.';
   }
 });
 
@@ -552,5 +556,7 @@ clearHistoryBtn.addEventListener('click', () => {
   renderHistory();
 });
 
-// Notify Main Process that frontend is fully loaded and listening
-window.api.appLoaded();
+// Notify Electron main process (desktop only) that frontend is ready
+if (window.api && typeof window.api.appLoaded === 'function') {
+  try { window.api.appLoaded(); } catch(e) { console.warn('appLoaded error:', e); }
+}
