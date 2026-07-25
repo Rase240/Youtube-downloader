@@ -62,7 +62,7 @@
       <!-- Input Panel -->
       <section class="card glass search-card">
         <h2>Download YouTube & Instagram Videos</h2>
-        <p class="card-subtitle text-secondary">Paste a link below to analyze and download in high quality.</p>
+        <p class="card-subtitle text-secondary">Paste a link below to analyze and download in high quality with metadata obfuscation.</p>
         
         <form id="url-form" class="search-form">
           <div class="input-group">
@@ -74,6 +74,9 @@
               required
               autocomplete="off"
             >
+            <button type="button" id="paste-btn" class="btn btn-secondary btn-paste" title="Paste from Clipboard">
+              <i class="fa-solid fa-paste"></i> Paste
+            </button>
             <button type="submit" id="analyze-btn" class="btn btn-primary">
               <i class="fa-solid fa-magnifying-glass"></i> Analyze
             </button>
@@ -92,6 +95,9 @@
               <div id="video-thumbnail-bg" class="thumbnail-blur-bg"></div>
               <img id="video-thumbnail" src="" alt="Video Thumbnail">
               <span id="video-duration" class="duration-badge">00:00</span>
+              <div class="shield-badge" title="Anti-Algorithm Metadata Obfuscation Active">
+                <i class="fa-solid fa-user-shield"></i> Shield Active
+              </div>
             </div>
             <div class="video-meta">
               <h3 id="video-title">Video Title</h3>
@@ -128,11 +134,14 @@
               </div>
             </div>
 
-            <!-- Quality Select (Swapped dynamically based on video/audio) -->
+            <!-- Quality Select (Interactive Pills + Select) -->
             <div class="settings-group" id="quality-group">
               <label for="quality-select"><i class="fa-solid fa-circle-chevron-down"></i> Resolution Quality</label>
-              <select id="quality-select" class="custom-select">
+              <div id="quality-pills" class="quality-pills-container">
                 <!-- Loaded dynamically -->
+              </div>
+              <select id="quality-select" class="custom-select hidden">
+                <!-- Hidden fallback for select -->
               </select>
             </div>
 
@@ -168,11 +177,27 @@
 
       <!-- Active Download Progress Panel (Hidden initially) -->
       <section id="progress-panel" class="card glass progress-card hidden">
-        <div class="progress-info-header">
+        <div class="progress-ring-header">
+          <!-- Circular SVG Progress Ring -->
+          <div class="progress-ring-wrapper">
+            <svg class="progress-ring" width="80" height="80">
+              <circle class="progress-ring-circle-bg" stroke="rgba(255,255,255,0.08)" stroke-width="6" fill="transparent" r="32" cx="40" cy="40"/>
+              <circle id="progress-ring-circle" class="progress-ring-circle" stroke="url(#progress-gradient)" stroke-width="6" stroke-linecap="round" fill="transparent" r="32" cx="40" cy="40" stroke-dasharray="201.06" stroke-dashoffset="201.06"/>
+              <defs>
+                <linearGradient id="progress-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#00F2FE" />
+                  <stop offset="100%" stop-color="#4FACFE" />
+                </linearGradient>
+              </defs>
+            </svg>
+            <span id="download-progress-percent" class="ring-percent-text">0%</span>
+          </div>
+
           <div class="progress-details">
             <h3 id="progress-status">Downloading...</h3>
             <p id="progress-file-title" class="text-secondary truncate">Video Title</p>
           </div>
+
           <button id="cancel-btn" class="btn btn-danger-outline">
             <i class="fa-solid fa-xmark"></i> Cancel
           </button>
@@ -182,7 +207,6 @@
           <div class="progress-bar-track">
             <div id="download-progress-fill" class="progress-bar-fill animated-stripe" style="width: 0%"></div>
           </div>
-          <span id="download-progress-percent" class="percent-label">0%</span>
         </div>
 
         <div class="progress-stats-grid">
@@ -207,11 +231,14 @@
           <i class="fa-solid fa-circle-check animate-scale"></i>
         </div>
         <h2>Download Complete!</h2>
-        <p id="complete-message" class="text-secondary">Your file has been saved successfully.</p>
+        <p id="complete-message" class="text-secondary">Your file has been saved successfully with randomized container metadata.</p>
         
         <div class="success-actions">
           <button id="open-file-btn" class="btn btn-primary">
             <i class="fa-solid fa-folder-open"></i> Show in Folder
+          </button>
+          <button id="copy-path-btn" class="btn btn-secondary">
+            <i class="fa-solid fa-copy"></i> Copy File Path
           </button>
           <button id="reset-btn" class="btn btn-secondary">
             <i class="fa-solid fa-arrow-rotate-left"></i> Download Another

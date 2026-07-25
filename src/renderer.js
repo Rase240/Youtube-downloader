@@ -115,6 +115,28 @@ async function initializeMainApp() {
   renderHistory();
 }
 
+const pasteBtn = document.getElementById('paste-btn');
+const qualityPills = document.getElementById('quality-pills');
+const progressRingCircle = document.getElementById('progress-ring-circle');
+const copyPathBtn = document.getElementById('copy-path-btn');
+
+// Paste Link from System Clipboard
+if (pasteBtn) {
+  pasteBtn.addEventListener('click', async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && (text.includes('youtube.com') || text.includes('youtu.be') || text.includes('instagram.com'))) {
+        videoUrlInput.value = text.trim();
+        analyzeBtn.click();
+      } else if (text) {
+        videoUrlInput.value = text.trim();
+      }
+    } catch (err) {
+      console.error('Clipboard read failed:', err);
+    }
+  });
+}
+
 // Select Directory Location
 browseBtn.addEventListener('click', async () => {
   const path = await window.api.selectDirectory();
@@ -126,13 +148,37 @@ browseBtn.addEventListener('click', async () => {
 // Radio Type Selection Change
 function updateQualityOptions() {
   qualitySelect.innerHTML = '';
+  if (qualityPills) qualityPills.innerHTML = '';
+  
   const formats = typeVideo.checked ? videoFormats : audioFormats;
   
-  formats.forEach(f => {
+  formats.forEach((f, idx) => {
     const opt = document.createElement('option');
     opt.value = f.id;
     opt.textContent = f.name;
     qualitySelect.appendChild(opt);
+
+    if (qualityPills) {
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = `quality-pill ${idx === 0 ? 'active' : ''}`;
+      
+      const labelText = f.name.split(' ')[0];
+      const isHD = f.name.includes('HD') || f.name.includes('4K');
+      
+      pill.innerHTML = `
+        <span>${labelText}</span>
+        ${isHD ? `<span class="quality-pill-hd">${f.name.includes('4K') ? '4K' : 'HD'}</span>` : ''}
+      `;
+
+      pill.addEventListener('click', () => {
+        document.querySelectorAll('.quality-pill').forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        qualitySelect.value = f.id;
+      });
+
+      qualityPills.appendChild(pill);
+    }
   });
 
   const label = qualityGroup.querySelector('label');
@@ -148,109 +194,15 @@ function updateQualityOptions() {
 typeVideo.addEventListener('change', updateQualityOptions);
 typeAudio.addEventListener('change', updateQualityOptions);
 
-// Convert Seconds to HH:MM:SS
-function formatDuration(sec) {
-  if (!sec) return '00:00';
-  const hrs = Math.floor(sec / 3600);
-  const mins = Math.floor((sec % 3600) / 60);
-  const secs = Math.floor(sec % 60);
-  
-  if (hrs > 0) {
-    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+// SVG Progress Ring Circumference (r=32 -> 2 * PI * 32 = 201.06)
+const ringCircumference = 201.06;
+
+function setProgressRing(percent) {
+  if (progressRingCircle) {
+    const offset = ringCircumference - (percent / 100) * ringCircumference;
+    progressRingCircle.style.strokeDashoffset = Math.max(0, offset);
   }
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
-
-// Convert Views to Compact String
-function formatViews(num) {
-  if (!num) return '0';
-  if (num >= 1000000000) {
-    return (num / 1000000000).toFixed(1).replace(/\.0$/, '') + 'B';
-  }
-  if (num >= 1000000) {
-    return (num / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
-  }
-  if (num >= 1000) {
-    return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
-  }
-  return num.toString();
-}
-
-// Format Date
-function formatDate(dateStr) {
-  if (!dateStr || dateStr.length !== 8) return 'Unknown Date';
-  const year = dateStr.substring(0, 4);
-  const month = dateStr.substring(4, 6);
-  const day = dateStr.substring(6, 8);
-  const date = new Date(`${year}-${month}-${day}`);
-  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-// Submit Search URL Form (Supports YouTube & Instagram links)
-urlForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const url = videoUrlInput.value.trim();
-  if (!url) return;
-
-  errorMessage.classList.add('hidden');
-  detailsPanel.classList.add('hidden');
-  completePanel.classList.add('hidden');
-  progressPanel.classList.add('hidden');
-
-  analyzeBtn.disabled = true;
-  analyzeBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Analyzing...';
-
-  try {
-    const info = await window.api.fetchInfo(url);
-    currentVideoData = info;
-
-    const thumbUrl = info.thumbnail || info.thumbnails?.[0]?.url || '';
-    videoThumbnail.src = thumbUrl;
-    if (videoThumbnailBg) {
-      videoThumbnailBg.style.backgroundImage = thumbUrl ? `url("${thumbUrl}")` : 'none';
-    }
-
-    videoDuration.textContent = formatDuration(info.duration);
-    videoTitle.textContent = info.title || info.description?.slice(0, 60) || 'Untitled Video';
-    videoChannel.innerHTML = `<i class="fa-solid fa-circle-check channel-verify"></i> ${info.uploader || info.channel || 'Creator'}`;
-    videoViews.innerHTML = `<i class="fa-solid fa-eye"></i> ${formatViews(info.view_count)} views`;
-    videoDate.innerHTML = `<i class="fa-solid fa-calendar"></i> ${formatDate(info.upload_date)}`;
-
-    updateQualityOptions();
-    detailsPanel.classList.remove('hidden');
-  } catch (err) {
-    errorMessage.textContent = err.message || 'An error occurred while fetching video info.';
-    errorMessage.classList.remove('hidden');
-  } finally {
-    analyzeBtn.disabled = false;
-    analyzeBtn.innerHTML = '<i class="fa-solid fa-magnifying-glass"></i> Analyze';
-  }
-});
-
-// Trigger Download Flow
-downloadBtn.addEventListener('click', () => {
-  if (!currentVideoData) return;
-
-  const url = videoUrlInput.value.trim();
-  const formatId = qualitySelect.value;
-  const type = typeVideo.checked ? 'video' : 'audio';
-  const containerFormat = formatMp4.checked ? 'mp4' : 'webm';
-  const outputFolder = savePathInput.value;
-  const obfuscate = obfuscateToggle ? obfuscateToggle.checked : false;
-
-  detailsPanel.classList.add('hidden');
-  progressPanel.classList.remove('hidden');
-
-  progressStatus.textContent = 'Preparing Download...';
-  progressFileTitle.textContent = currentVideoData.title || 'Video Download';
-  downloadProgressFill.style.width = '0%';
-  downloadProgressPercent.textContent = '0%';
-  statSpeed.textContent = '-- MB/s';
-  statEta.textContent = '--:--';
-  statSize.textContent = '-- MB';
-
-  window.api.startDownload({ url, formatId, type, containerFormat, outputFolder, obfuscate });
-});
 
 // Download Progress Listeners
 window.api.onDownloadProgress((data) => {
@@ -258,8 +210,10 @@ window.api.onDownloadProgress((data) => {
     progressStatus.textContent = data.status;
   }
   if (data.percent !== undefined) {
-    downloadProgressFill.style.width = `${data.percent}%`;
-    downloadProgressPercent.textContent = `${Math.round(data.percent)}%`;
+    const pct = Math.round(data.percent);
+    downloadProgressFill.style.width = `${pct}%`;
+    downloadProgressPercent.textContent = `${pct}%`;
+    setProgressRing(pct);
   }
   if (data.speed) {
     statSpeed.textContent = data.speed;
@@ -320,6 +274,19 @@ openFileBtn.addEventListener('click', () => {
     window.api.openFolder(savePathInput.value);
   }
 });
+
+// Copy File Path Button
+if (copyPathBtn) {
+  copyPathBtn.addEventListener('click', () => {
+    if (currentFilePath) {
+      navigator.clipboard.writeText(currentFilePath);
+      copyPathBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
+      setTimeout(() => {
+        copyPathBtn.innerHTML = '<i class="fa-solid fa-copy"></i> Copy File Path';
+      }, 2000);
+    }
+  });
+}
 
 // Download Another Reset
 resetBtn.addEventListener('click', () => {
