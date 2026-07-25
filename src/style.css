@@ -248,14 +248,7 @@ p {
   z-index: 10;
 }
 
-/* Instant Mobile App Display (0ms delay) */
-html.is-mobile-app #setup-screen {
-  display: none !important;
-}
 
-html.is-mobile-app #app-container {
-  display: flex !important;
-}
 
 .setup-card {
   width: 100%;
