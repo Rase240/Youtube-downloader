@@ -22,8 +22,9 @@ if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir, { recursive: true });
 }
 
-// FFmpeg Obfuscation Helper
-function obfuscateVideoMetadata(inputPath) {
+// FFmpeg metadata sanitization (privacy: strip embedded metadata such as
+// device/location info before the file is served).
+function sanitizeVideoMetadata(inputPath) {
   return new Promise((resolve) => {
     let cleanInput = (inputPath || '').replace(/^["']|["']$/g, '').trim();
     if (!fs.existsSync(cleanInput)) {
@@ -31,28 +32,21 @@ function obfuscateVideoMetadata(inputPath) {
     }
 
     const ext = path.extname(cleanInput) || '.mp4';
-    const randomId = Math.floor(10000 + Math.random() * 90000);
-    const randomStr = Math.random().toString(36).substring(2, 10);
-    const outputPath = path.join(downloadsDir, `project_${randomId}${ext}`);
-
-    const randomMinutes = Math.floor(15 + Math.random() * 4300);
-    const pastDate = new Date(Date.now() - randomMinutes * 60 * 1000).toISOString();
+    const base = path.basename(cleanInput, ext);
+    const outputPath = path.join(downloadsDir, `${base}_clean${ext}`);
 
     const args = [
       '-y',
       '-i', cleanInput,
       '-c', 'copy',
       '-map_metadata', '-1',
-      '-metadata', `title=Export_${randomId}`,
-      '-metadata', `comment=Rendered_with_${randomStr}`,
-      '-metadata', `creation_time=${pastDate}`,
       outputPath
     ];
 
     const child = spawn(ffmpeg, args);
     child.on('close', (code) => {
       if (code === 0 && fs.existsSync(outputPath)) {
-        try { fs.unlinkSync(cleanInput); } catch(e) {}
+        try { fs.unlinkSync(cleanInput); } catch (e) { }
         resolve(outputPath);
       } else {
         resolve(cleanInput);
@@ -79,11 +73,20 @@ app.get('/api/info', (req, res) => {
 
   let stdout = '';
   let stderr = '';
+  let settled = false;
 
   child.stdout.on('data', (d) => { stdout += d.toString(); });
   child.stderr.on('data', (d) => { stderr += d.toString(); });
 
+  child.on('error', (err) => {
+    if (settled) return;
+    settled = true;
+    res.status(500).json({ error: `Failed to start yt-dlp: ${err.message}` });
+  });
+
   child.on('close', (code) => {
+    if (settled) return;
+    settled = true;
     if (code === 0) {
       try {
         const info = JSON.parse(stdout);
@@ -97,7 +100,7 @@ app.get('/api/info', (req, res) => {
   });
 });
 
-// Download & Obfuscate API
+// Download & Sanitize API
 app.post('/api/download', (req, res) => {
   const { url, formatId, type, containerFormat, obfuscate = true } = req.body;
   if (!url) {
@@ -134,6 +137,7 @@ app.post('/api/download', (req, res) => {
 
   const child = spawn(binToUse, args);
   let filepath = '';
+  let responded = false;
 
   child.stdout.on('data', (data) => {
     const text = data.toString();
@@ -143,7 +147,15 @@ app.post('/api/download', (req, res) => {
     if (mergeMatch) filepath = mergeMatch[1].replace(/^["']|["']$/g, '').trim();
   });
 
+  child.on('error', (err) => {
+    if (responded) return;
+    responded = true;
+    res.status(500).json({ error: `Failed to start yt-dlp: ${err.message}` });
+  });
+
   child.on('close', async (code) => {
+    if (responded) return;
+
     if (code === 0) {
       let cleanPath = (filepath || '').replace(/^["']|["']$/g, '').trim();
 
@@ -156,16 +168,18 @@ app.post('/api/download', (req, res) => {
       }
 
       if (obfuscate && cleanPath && fs.existsSync(cleanPath)) {
-        cleanPath = await obfuscateVideoMetadata(cleanPath);
+        cleanPath = await sanitizeVideoMetadata(cleanPath);
       }
 
+      responded = true;
       const filename = path.basename(cleanPath);
       res.json({
         success: true,
         filename,
-        downloadUrl: `/api/file/${filename}`
+        downloadUrl: `/api/file/${encodeURIComponent(filename)}`
       });
     } else {
+      responded = true;
       res.status(500).json({ error: 'Download failed' });
     }
   });
@@ -173,9 +187,21 @@ app.post('/api/download', (req, res) => {
 
 // File Stream Download Route
 app.get('/api/file/:filename', (req, res) => {
-  const filePath = path.join(downloadsDir, req.params.filename);
-  if (fs.existsSync(filePath)) {
-    res.download(filePath);
+  // Prevent path traversal: only allow a bare filename with no separators,
+  // and resolve+verify it stays inside downloadsDir.
+  const requested = req.params.filename;
+  if (!requested || requested.includes('/') || requested.includes('\\') || requested.includes('..')) {
+    return res.status(400).json({ error: 'Invalid filename' });
+  }
+
+  const filePath = path.join(downloadsDir, requested);
+  const resolved = path.resolve(filePath);
+  if (!resolved.startsWith(path.resolve(downloadsDir) + path.sep)) {
+    return res.status(400).json({ error: 'Invalid filename' });
+  }
+
+  if (fs.existsSync(resolved)) {
+    res.download(resolved);
   } else {
     res.status(404).json({ error: 'File not found' });
   }
