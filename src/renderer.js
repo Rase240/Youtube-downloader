@@ -122,7 +122,8 @@ if (!window.api) {
 
       // 2. Fetch real live video metadata & author from oEmbed API
       try {
-        const oembedRes = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(url)}`);
+        const fetchUrl = ytId ? `https://www.youtube.com/watch?v=${ytId}` : url;
+        const oembedRes = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(fetchUrl)}`);
         if (oembedRes.ok) {
           const odata = await oembedRes.json();
           if (odata && odata.title) {
@@ -229,7 +230,14 @@ const copyPathBtn = document.getElementById('copy-path-btn');
 if (pasteBtn) {
   pasteBtn.addEventListener('click', async () => {
     try {
-      const text = await navigator.clipboard.readText();
+      let text = '';
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Clipboard) {
+        const { value } = await window.Capacitor.Plugins.Clipboard.read();
+        text = value;
+      } else {
+        text = await navigator.clipboard.readText();
+      }
+      
       if (text && (text.includes('youtube.com') || text.includes('youtu.be') || text.includes('instagram.com'))) {
         videoUrlInput.value = text.trim();
         analyzeBtn.click();
