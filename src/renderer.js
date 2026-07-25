@@ -207,6 +207,26 @@ if (pasteBtn) {
   });
 }
 
+// Mobile Bottom Nav Tab Listeners
+const navDownloaderBtn = document.getElementById('nav-downloader-btn');
+const navHistoryBtn = document.getElementById('nav-history-btn');
+const historyPanel = document.getElementById('history-panel');
+const searchCard = document.querySelector('.search-card');
+
+if (navDownloaderBtn && navHistoryBtn) {
+  navDownloaderBtn.addEventListener('click', () => {
+    navDownloaderBtn.classList.add('active');
+    navHistoryBtn.classList.remove('active');
+    if (searchCard) searchCard.scrollIntoView({ behavior: 'smooth' });
+  });
+
+  navHistoryBtn.addEventListener('click', () => {
+    navHistoryBtn.classList.add('active');
+    navDownloaderBtn.classList.remove('active');
+    if (historyPanel) historyPanel.scrollIntoView({ behavior: 'smooth' });
+  });
+}
+
 // Select Directory Location
 browseBtn.addEventListener('click', async () => {
   const path = await window.api.selectDirectory();

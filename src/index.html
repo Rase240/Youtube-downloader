@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="description" content="Download YouTube & Instagram videos with Anti-Algorithm metadata obfuscation">
   <title>YT Downloader Pro</title>
   <link rel="stylesheet" href="style.css">
@@ -20,7 +20,7 @@
   <div class="glow-bg glow-purple"></div>
   <div class="glow-bg glow-pink"></div>
 
-  <!-- SETUP SCREEN (Shown during yt-dlp check/download) -->
+  <!-- SETUP SCREEN (Shown during yt-dlp check/download on Desktop) -->
   <div id="setup-screen" class="setup-container">
     <div class="setup-card glass">
       <div class="app-logo">
@@ -50,7 +50,7 @@
   <!-- MAIN APP CONTAINER -->
   <div id="app-container" class="main-layout hidden">
     
-    <!-- Sidebar / Top Branding -->
+    <!-- Sidebar / Top Branding Header -->
     <header class="app-header">
       <div class="app-logo">
         <img src="assets/icon.png" class="app-logo-img animate-pulse" alt="YT Downloader Pro Icon">
@@ -68,20 +68,24 @@
         
         <form id="url-form" class="search-form">
           <div class="input-group">
-            <i class="fa-solid fa-link input-icon"></i>
-            <input 
-              type="url" 
-              id="video-url" 
-              placeholder="https://www.youtube.com/watch?v=... or https://www.instagram.com/reel/..." 
-              required
-              autocomplete="off"
-            >
-            <button type="button" id="paste-btn" class="btn btn-secondary btn-paste" title="Paste from Clipboard">
-              <i class="fa-solid fa-paste"></i> Paste
-            </button>
-            <button type="submit" id="analyze-btn" class="btn btn-primary">
-              <i class="fa-solid fa-magnifying-glass"></i> Analyze
-            </button>
+            <div class="input-field-wrapper">
+              <i class="fa-solid fa-link input-icon"></i>
+              <input 
+                type="url" 
+                id="video-url" 
+                placeholder="Paste YouTube or Instagram link..." 
+                required
+                autocomplete="off"
+              >
+            </div>
+            <div class="input-actions-row">
+              <button type="button" id="paste-btn" class="btn btn-secondary btn-paste" title="Paste from Clipboard">
+                <i class="fa-solid fa-paste"></i> Paste
+              </button>
+              <button type="submit" id="analyze-btn" class="btn btn-primary">
+                <i class="fa-solid fa-magnifying-glass"></i> Analyze
+              </button>
+            </div>
           </div>
         </form>
         <div id="error-message" class="error-msg hidden"></div>
@@ -152,7 +156,7 @@
               <label class="toggle-option-box">
                 <div class="toggle-option-info">
                   <span class="toggle-option-title"><i class="fa-solid fa-user-shield"></i> Anti-Algorithm Obfuscation</span>
-                  <span class="toggle-option-desc">Strips original metadata & renames to project_XXXX.mp4</span>
+                  <span class="toggle-option-desc">Strips metadata & renames file to project_XXXX.mp4</span>
                 </div>
                 <input type="checkbox" id="obfuscate-toggle" class="toggle-input" checked>
                 <span class="toggle-slider"></span>
@@ -249,7 +253,7 @@
       </section>
 
       <!-- History Panel -->
-      <section class="card glass history-card">
+      <section id="history-panel" class="card glass history-card">
         <div class="history-header">
           <h3><i class="fa-solid fa-clock-rotate-left"></i> Recent Downloads</h3>
           <button id="clear-history-btn" class="btn btn-link hidden">Clear All</button>
@@ -265,6 +269,21 @@
 
     </main>
 
+    <!-- Native Mobile Bottom Navigation Bar (Material 3 Style) -->
+    <nav class="mobile-bottom-nav">
+      <button type="button" class="nav-item active" id="nav-downloader-btn">
+        <div class="nav-icon-wrapper">
+          <i class="fa-solid fa-cloud-arrow-down"></i>
+        </div>
+        <span>Downloader</span>
+      </button>
+      <button type="button" class="nav-item" id="nav-history-btn">
+        <div class="nav-icon-wrapper">
+          <i class="fa-solid fa-clock-rotate-left"></i>
+        </div>
+        <span>History</span>
+      </button>
+    </nav>
   </div>
 
   <script src="renderer.js"></script>
