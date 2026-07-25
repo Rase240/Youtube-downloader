@@ -1443,6 +1443,11 @@ p {
     flex: 1.3;
   }
 
+  /* Hide History card on main Downloader screen (Mobile tab mode) */
+  #history-panel {
+    display: none;
+  }
+
   .quality-pill {
     min-width: 75px;
     padding: 0.6rem 0.5rem;
