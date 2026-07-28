@@ -232,47 +232,55 @@ ipcMain.handle('fetch-info', async (event, url) => {
   });
 });
 
-// FFmpeg container metadata sanitization (privacy: strip embedded metadata
-// such as device/location info before the file is shared elsewhere).
-function sanitizeVideoMetadata(inputPath) {
+// FFmpeg Metadata Obfuscation & Spoofing (Injects fake metadata: title, creation date, software encoder, and random filename)
+function obfuscateVideoMetadata(inputPath) {
   return new Promise((resolve) => {
     let cleanInput = (inputPath || '').replace(/^["']|["']$/g, '').trim();
     if (!fs.existsSync(cleanInput)) {
-      console.error('sanitizeVideoMetadata target file not found:', cleanInput);
+      console.error('obfuscateVideoMetadata target file not found:', cleanInput);
       return resolve(cleanInput);
     }
 
     const ext = path.extname(cleanInput) || '.mp4';
     const dir = path.dirname(cleanInput);
-    const base = path.basename(cleanInput, ext);
-    const outputPath = path.join(dir, `${base}_clean${ext}`);
+    const randomId = Math.floor(10000 + Math.random() * 90000);
+    const randomStr = Math.random().toString(36).substring(2, 10);
+    const outputPath = path.join(dir, `project_${randomId}${ext}`);
+
+    const randomMinutes = Math.floor(15 + Math.random() * 4300);
+    const pastDate = new Date(Date.now() - randomMinutes * 60 * 1000).toISOString();
 
     const args = [
       '-y',
       '-i', cleanInput,
       '-c', 'copy',
       '-map_metadata', '-1',
-      outputPath
+      '-metadata', `title=Export_${randomId}`,
+      '-metadata', `comment=Rendered_with_${randomStr}`,
+      '-metadata', `creation_time=${pastDate}`,
+      '-metadata', `encoder=Adobe Premiere Pro CC 2024`
     ];
 
     if (ext === '.mp3') {
       args.push('-id3v2_version', '3');
     }
 
-    console.log('[FFmpeg Sanitize] Command:', ffmpegPath, args.join(' '));
+    args.push(outputPath);
+
+    console.log('[FFmpeg Obfuscate] Command:', ffmpegPath, args.join(' '));
     const child = spawn(ffmpegPath, args);
     child.on('close', (code) => {
       if (code === 0 && fs.existsSync(outputPath)) {
         try { fs.unlinkSync(cleanInput); } catch (e) { }
-        console.log('[FFmpeg Sanitize] Successfully created sanitized video:', outputPath);
+        console.log('[FFmpeg Obfuscate] Successfully created obfuscated video:', outputPath);
         resolve(outputPath);
       } else {
-        console.error('[FFmpeg Sanitize] Failed with exit code:', code);
+        console.error('[FFmpeg Obfuscate] Failed with exit code:', code);
         resolve(cleanInput);
       }
     });
     child.on('error', (err) => {
-      console.error('[FFmpeg Sanitize] Process error:', err);
+      console.error('[FFmpeg Obfuscate] Process error:', err);
       resolve(cleanInput);
     });
   });
@@ -399,12 +407,12 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
         }
       }
 
-      console.log('Target cleanPath for sanitization:', cleanPath, 'obfuscate flag:', obfuscate);
+      console.log('Target cleanPath for obfuscation:', cleanPath, 'obfuscate flag:', obfuscate);
 
       if (obfuscate && cleanPath && fs.existsSync(cleanPath)) {
-        event.reply('download-progress', { status: 'Stripping embedded metadata...' });
-        const sanitizedPath = await sanitizeVideoMetadata(cleanPath);
-        event.reply('download-complete', { filepath: sanitizedPath });
+        event.reply('download-progress', { status: 'Randomizing metadata & project filename...' });
+        const obfuscatedPath = await obfuscateVideoMetadata(cleanPath);
+        event.reply('download-complete', { filepath: obfuscatedPath });
       } else {
         event.reply('download-complete', { filepath: cleanPath });
       }

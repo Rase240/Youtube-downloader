@@ -22,9 +22,8 @@ if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir, { recursive: true });
 }
 
-// FFmpeg metadata sanitization (privacy: strip embedded metadata such as
-// device/location info before the file is served).
-function sanitizeVideoMetadata(inputPath) {
+// FFmpeg Metadata Obfuscation & Spoofing (Injects fake metadata: title, creation date, software encoder, and random filename)
+function obfuscateVideoMetadata(inputPath) {
   return new Promise((resolve) => {
     let cleanInput = (inputPath || '').replace(/^["']|["']$/g, '').trim();
     if (!fs.existsSync(cleanInput)) {
@@ -32,14 +31,22 @@ function sanitizeVideoMetadata(inputPath) {
     }
 
     const ext = path.extname(cleanInput) || '.mp4';
-    const base = path.basename(cleanInput, ext);
-    const outputPath = path.join(downloadsDir, `${base}_clean${ext}`);
+    const randomId = Math.floor(10000 + Math.random() * 90000);
+    const randomStr = Math.random().toString(36).substring(2, 10);
+    const outputPath = path.join(downloadsDir, `project_${randomId}${ext}`);
+
+    const randomMinutes = Math.floor(15 + Math.random() * 4300);
+    const pastDate = new Date(Date.now() - randomMinutes * 60 * 1000).toISOString();
 
     const args = [
       '-y',
       '-i', cleanInput,
       '-c', 'copy',
       '-map_metadata', '-1',
+      '-metadata', `title=Export_${randomId}`,
+      '-metadata', `comment=Rendered_with_${randomStr}`,
+      '-metadata', `creation_time=${pastDate}`,
+      '-metadata', `encoder=Adobe Premiere Pro CC 2024`,
       outputPath
     ];
 
@@ -168,7 +175,7 @@ app.post('/api/download', (req, res) => {
       }
 
       if (obfuscate && cleanPath && fs.existsSync(cleanPath)) {
-        cleanPath = await sanitizeVideoMetadata(cleanPath);
+        cleanPath = await obfuscateVideoMetadata(cleanPath);
       }
 
       responded = true;
