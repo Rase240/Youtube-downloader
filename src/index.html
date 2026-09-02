@@ -47,6 +47,44 @@
     </div>
   </div>
 
+  <!-- AUTH LOCK SCREEN (Shown on Web when server password is required) -->
+  <div id="auth-screen" class="setup-container hidden">
+    <div class="setup-card glass auth-card">
+      <div class="app-logo">
+        <img src="assets/icon.png" class="app-logo-img" alt="YT Downloader Pro Icon">
+        <span>YT Downloader <span class="accent-text">Pro</span></span>
+      </div>
+      <div class="auth-shield-badge">
+        <i class="fa-solid fa-shield-halved"></i>
+      </div>
+      <h3 id="auth-title">Protected Server</h3>
+      <p id="auth-subtitle" class="text-secondary">Enter your server password to unlock video downloading.</p>
+      
+      <form id="auth-form" class="auth-form">
+        <div class="auth-input-wrapper">
+          <i class="fa-solid fa-key input-icon"></i>
+          <input 
+            type="password" 
+            id="auth-password" 
+            placeholder="Enter server password..." 
+            required 
+            autocomplete="current-password"
+          >
+          <button type="button" id="toggle-pwd-btn" class="toggle-pwd-btn" title="Show/Hide Password">
+            <i class="fa-regular fa-eye"></i>
+          </button>
+        </div>
+        <div id="auth-error" class="error-msg auth-error-banner hidden">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+          <span id="auth-error-text">Incorrect password. Access denied.</span>
+        </div>
+        <button type="submit" id="auth-submit-btn" class="btn btn-primary btn-block">
+          <i class="fa-solid fa-lock-open"></i> Unlock Downloader
+        </button>
+      </form>
+    </div>
+  </div>
+
   <!-- MAIN APP CONTAINER -->
   <div id="app-container" class="main-layout hidden">
     
@@ -55,6 +93,12 @@
       <div class="app-logo">
         <img src="assets/icon.png" class="app-logo-img animate-pulse" alt="YT Downloader Pro Icon">
         <span>YT Downloader <span class="accent-text">Pro</span></span>
+      </div>
+      <div id="header-auth-badge" class="header-auth-badge hidden">
+        <button id="lock-server-btn" class="header-action-btn" title="Sign Out / Lock Downloader">
+          <i class="fa-solid fa-lock"></i>
+          <span class="btn-text">Lock</span>
+        </button>
       </div>
     </header>
 
