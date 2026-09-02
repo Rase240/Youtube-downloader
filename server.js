@@ -250,13 +250,17 @@ app.get('/api/info', checkAuth, (req, res) => {
     return res.status(400).json({ error: 'URL parameter is required' });
   }
 
+  const cookiesPath = path.join(__dirname, 'cookies.txt');
   const binToUse = fs.existsSync(ytdlpPath) ? ytdlpPath : 'yt-dlp';
   const infoArgs = [
     '-j',
     '--no-warnings',
-    '--extractor-args', 'youtube:player_client=android,web',
+    '--extractor-args', 'youtube:player_client=ios,android,mweb',
     videoUrl
   ];
+  if (fs.existsSync(cookiesPath)) {
+    infoArgs.push('--cookies', cookiesPath);
+  }
 
   const child = spawn(binToUse, infoArgs);
 
@@ -300,12 +304,17 @@ app.post('/api/download', checkAuth, (req, res) => {
     return res.status(400).json({ error: 'URL is required' });
   }
 
+  const cookiesPath = path.join(__dirname, 'cookies.txt');
   const binToUse = fs.existsSync(ytdlpPath) ? ytdlpPath : 'yt-dlp';
   const args = [
     '--no-warnings',
     '--restrict-filenames',
-    '--extractor-args', 'youtube:player_client=android,web'
+    '--extractor-args', 'youtube:player_client=ios,android,mweb'
   ];
+
+  if (fs.existsSync(cookiesPath)) {
+    args.push('--cookies', cookiesPath);
+  }
 
   // Only supply --ffmpeg-location if an explicit binary file path exists
   if (resolvedFfmpeg && fs.existsSync(resolvedFfmpeg)) {
