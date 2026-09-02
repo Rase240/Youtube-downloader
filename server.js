@@ -252,16 +252,21 @@ app.get('/api/info', checkAuth, (req, res) => {
 
   const cookiesPath = path.join(__dirname, 'cookies.txt');
   const binToUse = fs.existsSync(ytdlpPath) ? ytdlpPath : 'yt-dlp';
+  const hasCookies = fs.existsSync(cookiesPath);
+
   const infoArgs = [
     '-j',
     '--no-warnings',
-    '--js-runtimes', 'node',
-    '--extractor-args', 'youtube:player_client=ios,android,mweb',
-    videoUrl
+    '--js-runtimes', 'deno,node'
   ];
-  if (fs.existsSync(cookiesPath)) {
+
+  if (hasCookies) {
     infoArgs.push('--cookies', cookiesPath);
+  } else {
+    infoArgs.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
   }
+
+  infoArgs.push(videoUrl);
 
   const child = spawn(binToUse, infoArgs);
 
@@ -307,15 +312,18 @@ app.post('/api/download', checkAuth, (req, res) => {
 
   const cookiesPath = path.join(__dirname, 'cookies.txt');
   const binToUse = fs.existsSync(ytdlpPath) ? ytdlpPath : 'yt-dlp';
+  const hasCookies = fs.existsSync(cookiesPath);
+
   const args = [
     '--no-warnings',
     '--restrict-filenames',
-    '--js-runtimes', 'node',
-    '--extractor-args', 'youtube:player_client=ios,android,mweb'
+    '--js-runtimes', 'deno,node'
   ];
 
-  if (fs.existsSync(cookiesPath)) {
+  if (hasCookies) {
     args.push('--cookies', cookiesPath);
+  } else {
+    args.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
   }
 
   // Only supply --ffmpeg-location if an explicit binary file path exists
