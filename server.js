@@ -201,6 +201,18 @@ app.get('/api/auth/status', (req, res) => {
   });
 });
 
+// Token Validation Endpoint (check if saved session token is still valid)
+app.post('/api/auth/validate', (req, res) => {
+  if (!APP_PASSWORD || APP_PASSWORD.trim().length === 0) {
+    return res.json({ valid: true, authRequired: false });
+  }
+  const { token } = req.body || {};
+  if (token && isValidSession(token)) {
+    return res.json({ valid: true });
+  }
+  return res.status(401).json({ valid: false });
+});
+
 // Auth Verification Endpoint (rate-limited)
 app.post('/api/auth/verify', (req, res) => {
   if (!APP_PASSWORD || APP_PASSWORD.trim().length === 0) {
