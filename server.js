@@ -255,6 +255,7 @@ app.get('/api/info', checkAuth, (req, res) => {
   const infoArgs = [
     '-j',
     '--no-warnings',
+    '--js-runtimes', 'node',
     '--extractor-args', 'youtube:player_client=ios,android,mweb',
     videoUrl
   ];
@@ -309,6 +310,7 @@ app.post('/api/download', checkAuth, (req, res) => {
   const args = [
     '--no-warnings',
     '--restrict-filenames',
+    '--js-runtimes', 'node',
     '--extractor-args', 'youtube:player_client=ios,android,mweb'
   ];
 
@@ -323,14 +325,24 @@ app.post('/api/download', checkAuth, (req, res) => {
 
   if (type === 'audio') {
     args.push(
-      '-f', 'bestaudio/best',
+      '-f', 'ba/b',
       '-x',
       '--audio-format', 'mp3',
       '--audio-quality', '0'
     );
   } else {
-    let requestedFormat = formatId || 'bestvideo+bestaudio/best';
-    let finalFormatId = `${requestedFormat}/${requestedFormat.replace('[ext=m4a]', '')}/bestvideo+bestaudio/best`;
+    // Resilient format selection:
+    // Handles both landscape & portrait (Shorts) videos, and falls back to
+    // highest available stream (/ b) so it NEVER errors with "Requested format is not available".
+    const heightMatch = (formatId || '').match(/height<=(\d+)/);
+    const maxH = heightMatch ? heightMatch[1] : null;
+    let finalFormatId;
+    if (maxH) {
+      finalFormatId = `bv*[height<=?${maxH}]+ba/b[height<=?${maxH}] / bv*[width<=?${maxH}]+ba/b[width<=?${maxH}] / bv*+ba / b`;
+    } else {
+      finalFormatId = 'bv*+ba / b';
+    }
+
     args.push(
       '-f', finalFormatId,
       '--merge-output-format', containerFormat || 'mp4'
