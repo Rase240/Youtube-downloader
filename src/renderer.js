@@ -172,10 +172,31 @@ async function verifyPasswordWithServer(password) {
       const data = await res.json();
       return { success: true, token: data.token || password };
     }
+    if (res.status === 429) {
+      const errData = await res.json().catch(() => ({}));
+      return { success: false, error: errData.error || 'Too many failed attempts. Please wait 15 minutes.' };
+    }
     const errData = await res.json().catch(() => ({}));
     return { success: false, error: errData.error || 'Incorrect password. Access denied.' };
   } catch (e) {
-    return { success: false, error: 'Cannot connect to server.' };
+    return { success: false, error: 'Cannot connect to server. Is it running?' };
+  }
+}
+
+async function validateSavedToken(token) {
+  try {
+    const res = await fetch(`${getApiHost()}/api/auth/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data.valid === true;
+    }
+    return false;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -216,8 +237,8 @@ if (!window.api) {
       // 2. Auth required: check if user already has a saved token that is valid
       const existingToken = getStoredAuthToken();
       if (existingToken) {
-        const check = await verifyPasswordWithServer(existingToken);
-        if (check.success) {
+        const isValid = await validateSavedToken(existingToken);
+        if (isValid) {
           updateAuthUi(true);
           requestAnimationFrame(() => cb({ stage: 'ready' }));
           return;
