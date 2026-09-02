@@ -95,8 +95,16 @@ const ytdlpFilename = isWin ? 'yt-dlp.exe' : 'yt-dlp';
 const ytdlpPath = path.join(__dirname, 'node_modules', 'yt-dlp-exec', 'bin', ytdlpFilename);
 const downloadsDir = path.join(__dirname, 'public_downloads');
 
-// FFmpeg fallback (ffmpeg-static or system binary)
-const ffmpegBin = (ffmpeg && typeof ffmpeg === 'string' && fs.existsSync(ffmpeg)) ? ffmpeg : 'ffmpeg';
+// Resolve FFmpeg binary (static or system binary)
+let resolvedFfmpeg = null;
+if (ffmpeg && typeof ffmpeg === 'string' && fs.existsSync(ffmpeg)) {
+  resolvedFfmpeg = ffmpeg;
+} else if (fs.existsSync('/usr/bin/ffmpeg')) {
+  resolvedFfmpeg = '/usr/bin/ffmpeg';
+} else if (fs.existsSync('/usr/local/bin/ffmpeg')) {
+  resolvedFfmpeg = '/usr/local/bin/ffmpeg';
+}
+const ffmpegBin = resolvedFfmpeg || 'ffmpeg';
 
 if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir, { recursive: true });
@@ -231,14 +239,24 @@ app.get('/api/info', checkAuth, (req, res) => {
   }
 
   const binToUse = fs.existsSync(ytdlpPath) ? ytdlpPath : 'yt-dlp';
-  const child = spawn(binToUse, ['-j', videoUrl]);
+  const infoArgs = [
+    '-j',
+    '--no-warnings',
+    '--extractor-args', 'youtube:player_client=android,web',
+    videoUrl
+  ];
+
+  const child = spawn(binToUse, infoArgs);
 
   let stdout = '';
   let stderr = '';
   let settled = false;
 
   child.stdout.on('data', (d) => { stdout += d.toString(); });
-  child.stderr.on('data', (d) => { stderr += d.toString(); });
+  child.stderr.on('data', (d) => { 
+    stderr += d.toString(); 
+    console.warn(`[yt-dlp info stderr] ${d.toString()}`);
+  });
 
   child.on('error', (err) => {
     if (settled) return;
@@ -257,6 +275,7 @@ app.get('/api/info', checkAuth, (req, res) => {
         res.status(500).json({ error: 'Failed to parse metadata' });
       }
     } else {
+      console.error(`[yt-dlp info error] Code ${code}:`, stderr);
       res.status(500).json({ error: stderr || 'Error analyzing URL' });
     }
   });
@@ -270,27 +289,30 @@ app.post('/api/download', checkAuth, (req, res) => {
   }
 
   const binToUse = fs.existsSync(ytdlpPath) ? ytdlpPath : 'yt-dlp';
-  const args = [];
+  const args = [
+    '--no-warnings',
+    '--restrict-filenames',
+    '--extractor-args', 'youtube:player_client=android,web'
+  ];
+
+  // Only supply --ffmpeg-location if an explicit binary file path exists
+  if (resolvedFfmpeg && fs.existsSync(resolvedFfmpeg)) {
+    args.push('--ffmpeg-location', resolvedFfmpeg);
+  }
 
   if (type === 'audio') {
     args.push(
       '-f', 'bestaudio/best',
       '-x',
       '--audio-format', 'mp3',
-      '--audio-quality', '0',
-      '--restrict-filenames',
-      '--no-warnings',
-      '--ffmpeg-location', ffmpegBin
+      '--audio-quality', '0'
     );
   } else {
     let requestedFormat = formatId || 'bestvideo+bestaudio/best';
     let finalFormatId = `${requestedFormat}/${requestedFormat.replace('[ext=m4a]', '')}/bestvideo+bestaudio/best`;
     args.push(
       '-f', finalFormatId,
-      '--merge-output-format', containerFormat || 'mp4',
-      '--restrict-filenames',
-      '--no-warnings',
-      '--ffmpeg-location', ffmpegBin
+      '--merge-output-format', containerFormat || 'mp4'
     );
   }
 
@@ -299,14 +321,22 @@ app.post('/api/download', checkAuth, (req, res) => {
 
   const child = spawn(binToUse, args);
   let filepath = '';
+  let stderr = '';
   let responded = false;
 
   child.stdout.on('data', (data) => {
     const text = data.toString();
+    console.log(`[yt-dlp stdout] ${text.trim()}`);
     const destMatch = text.match(/Destination:\s*(.+)$/m);
     const mergeMatch = text.match(/Merging formats into\s*["']?([^"'\r\n]+)["']?/);
     if (destMatch) filepath = destMatch[1].replace(/^["']|["']$/g, '').trim();
     if (mergeMatch) filepath = mergeMatch[1].replace(/^["']|["']$/g, '').trim();
+  });
+
+  child.stderr.on('data', (data) => {
+    const text = data.toString();
+    stderr += text;
+    console.warn(`[yt-dlp stderr] ${text.trim()}`);
   });
 
   child.on('error', (err) => {
@@ -342,7 +372,8 @@ app.post('/api/download', checkAuth, (req, res) => {
       });
     } else {
       responded = true;
-      res.status(500).json({ error: 'Download failed' });
+      console.error(`[Download Error] yt-dlp failed (code ${code}):`, stderr);
+      res.status(500).json({ error: stderr.trim() || 'Download failed' });
     }
   });
 });
