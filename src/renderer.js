@@ -98,11 +98,39 @@ let _appInitialized = false;
 // Auth State Management
 const AUTH_STORAGE_KEY = 'yt_server_auth_token';
 
+const DEFAULT_SERVER_URL = 'https://raserar.duckdns.org';
+
 function getApiHost() {
+  // 1. Check if user configured a custom server host in settings
+  const customHost = localStorage.getItem('custom_server_host');
+  if (customHost && customHost.trim()) {
+    return customHost.trim().replace(/\/+$/, '');
+  }
+
+  // 2. Check if running inside Capacitor native Android app
+  const isCapacitorNative = Boolean(
+    (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) ||
+    (typeof window !== 'undefined' && window.location && (window.location.protocol === 'capacitor:' || window.location.protocol === 'file:'))
+  );
+
+  // In Capacitor Android, window.location.origin is usually "https://localhost"
+  const isLocalHost = typeof window !== 'undefined' && window.location && (
+    window.location.hostname === 'localhost' || 
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname === '10.0.2.2'
+  );
+
+  // If on Android APK or local emulator, route to your live VPS server
+  if (isCapacitorNative || (isLocalHost && typeof window !== 'undefined' && !window.electron)) {
+    return DEFAULT_SERVER_URL;
+  }
+
+  // 3. Web Browser: dynamically use the current domain / origin
   if (typeof window !== 'undefined' && window.location && window.location.protocol && window.location.protocol.startsWith('http')) {
     return window.location.origin;
   }
-  return 'http://10.0.2.2:3000';
+
+  return DEFAULT_SERVER_URL;
 }
 
 function getStoredAuthToken() {
