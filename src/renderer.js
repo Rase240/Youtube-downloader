@@ -10,6 +10,17 @@ const setupLoader = document.getElementById('setup-loader');
 
 const appContainer = document.getElementById('app-container');
 
+// Auth Form Elements
+const authScreen = document.getElementById('auth-screen');
+const authForm = document.getElementById('auth-form');
+const authPasswordInput = document.getElementById('auth-password');
+const togglePwdBtn = document.getElementById('toggle-pwd-btn');
+const authError = document.getElementById('auth-error');
+const authErrorText = document.getElementById('auth-error-text');
+const authSubmitBtn = document.getElementById('auth-submit-btn');
+const headerAuthBadge = document.getElementById('header-auth-badge');
+const lockServerBtn = document.getElementById('lock-server-btn');
+
 // Main Form Elements
 const urlForm = document.getElementById('url-form');
 const videoUrlInput = document.getElementById('video-url');
@@ -84,34 +95,138 @@ const audioFormats = [
 // Guard flag to prevent double initialization
 let _appInitialized = false;
 
-// Safe API Bridge (Mobile Capacitor Fallback — fires when window.api is absent)
+// Auth State Management
+const AUTH_STORAGE_KEY = 'yt_server_auth_token';
+
+function getApiHost() {
+  if (typeof window !== 'undefined' && window.location && window.location.protocol && window.location.protocol.startsWith('http')) {
+    return window.location.origin;
+  }
+  return 'http://10.0.2.2:3000';
+}
+
+function getStoredAuthToken() {
+  try {
+    return localStorage.getItem(AUTH_STORAGE_KEY) || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function setStoredAuthToken(token) {
+  try {
+    if (token) localStorage.setItem(AUTH_STORAGE_KEY, token);
+    else localStorage.removeItem(AUTH_STORAGE_KEY);
+  } catch (e) {}
+}
+
+async function checkServerAuthStatus() {
+  try {
+    const res = await fetch(`${getApiHost()}/api/auth/status`);
+    if (res.ok) {
+      const data = await res.json();
+      return Boolean(data.authRequired);
+    }
+  } catch (e) {
+    console.warn('[Auth Check] Status check failed:', e);
+  }
+  return false;
+}
+
+async function verifyPasswordWithServer(password) {
+  try {
+    const res = await fetch(`${getApiHost()}/api/auth/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, token: data.token || password };
+    }
+    const errData = await res.json().catch(() => ({}));
+    return { success: false, error: errData.error || 'Incorrect password. Access denied.' };
+  } catch (e) {
+    return { success: false, error: 'Cannot connect to server.' };
+  }
+}
+
+function updateAuthUi(isAuthenticated) {
+  if (headerAuthBadge) {
+    if (isAuthenticated) headerAuthBadge.classList.remove('hidden');
+    else headerAuthBadge.classList.add('hidden');
+  }
+}
+
+function showAuthScreen() {
+  setStoredAuthToken('');
+  updateAuthUi(false);
+  if (setupScreen) setupScreen.classList.add('hidden');
+  if (appContainer) appContainer.classList.add('hidden');
+  if (authScreen) {
+    authScreen.classList.remove('hidden');
+    if (authPasswordInput) {
+      authPasswordInput.value = '';
+      authPasswordInput.focus();
+    }
+  }
+}
+
+// Safe API Bridge (Mobile / Web Fallback — fires when window.api is absent)
 if (!window.api) {
-  console.log('[Mobile] No Electron bridge — initializing mobile API...');
-  const API_SERVER = 'http://localhost:3000';
+  console.log('[Web/Mobile] No Electron bridge — initializing Web/Server API...');
 
   window.api = {
-    onSetupStatus: (cb) => {
-      // Skip setup screen on mobile — go straight to main UI
-      requestAnimationFrame(() => cb({ stage: 'ready' }));
+    onSetupStatus: async (cb) => {
+      // 1. Check if the server requires password authentication
+      const isAuthRequired = await checkServerAuthStatus();
+      if (!isAuthRequired) {
+        requestAnimationFrame(() => cb({ stage: 'ready' }));
+        return;
+      }
+
+      // 2. Auth required: check if user already has a saved token that is valid
+      const existingToken = getStoredAuthToken();
+      if (existingToken) {
+        const check = await verifyPasswordWithServer(existingToken);
+        if (check.success) {
+          updateAuthUi(true);
+          requestAnimationFrame(() => cb({ stage: 'ready' }));
+          return;
+        }
+      }
+
+      // 3. Need password input from user
+      requestAnimationFrame(() => cb({ stage: 'auth-required' }));
     },
     retrySetup: () => {},
-    appLoaded: () => {
-      // On mobile, appLoaded is a no-op (init happens via onSetupStatus)
-    },
+    appLoaded: () => {},
     getDefaultPath: async () => 'Downloads/YT-Obfuscated',
     selectDirectory: async () => 'Downloads/YT-Obfuscated',
     openFile: (path) => alert(`File saved to ${path}`),
     openFolder: (path) => alert(`Check your ${path} folder for the downloads.`),
     fetchInfo: async (url) => {
+      const host = getApiHost();
+      const token = getStoredAuthToken();
+      const headers = {};
+      if (token) headers['x-access-token'] = token;
+
       // 1. Try backend server if available
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000);
-        const host = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
-        const res = await fetch(`${host}/api/info?url=${encodeURIComponent(url)}`, { signal: controller.signal });
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const res = await fetch(`${host}/api/info?url=${encodeURIComponent(url)}`, { 
+          headers,
+          signal: controller.signal 
+        });
         clearTimeout(timeoutId);
         if (res.ok) return await res.json();
+        if (res.status === 401) {
+          showAuthScreen();
+          throw new Error('Authentication required. Please unlock the server.');
+        }
       } catch (e) {
+        if (e.message && e.message.includes('Authentication')) throw e;
         // Fall through to live oEmbed metadata fetcher
       }
 
@@ -144,32 +259,44 @@ if (!window.api) {
         console.warn('[Mobile Engine] oEmbed fetch fallback:', err);
       }
 
-      // 3. Direct YouTube CDN thumbnail fallback using real Video ID, or Generic Fallback
+      // 3. Direct YouTube CDN thumbnail fallback using real Video ID
       return {
         title: ytId ? `YouTube Video (${ytId})` : 'Generic Media Video',
         uploader: ytId ? 'YouTube Creator' : 'Unknown Creator',
         duration: 0,
         view_count: 0,
         upload_date: 'Unknown',
-        thumbnail: ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : 'assets/icon.png' // Use app icon as fallback instead of Rick Astley
+        thumbnail: ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : 'assets/icon.png'
       };
     },
     startDownload: async (opts) => {
       try {
-        window.api._notifyProgress({ status: 'Connecting to Desktop Companion Server...', percent: 10 });
-        const host = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
+        window.api._notifyProgress({ status: 'Connecting to server...', percent: 10 });
+        const host = getApiHost();
+        const token = getStoredAuthToken();
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['x-access-token'] = token;
+
         const res = await fetch(`${host}/api/download`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify(opts)
         });
+
+        if (res.status === 401) {
+          showAuthScreen();
+          window.api._notifyError('Authentication expired. Please re-enter your password.');
+          return;
+        }
+
         const data = await res.json();
         if (data.success && data.downloadUrl) {
           window.api._notifyProgress({ status: 'Downloading file to your device...', percent: 100 });
           
-          // Trigger actual native download to phone's filesystem
+          // Trigger actual download to user's device
           const downloadLink = document.createElement('a');
-          downloadLink.href = `${host}${data.downloadUrl}`;
+          const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
+          downloadLink.href = `${host}${data.downloadUrl}${tokenQuery}`;
           downloadLink.download = data.filename || 'download.mp4';
           document.body.appendChild(downloadLink);
           downloadLink.click();
@@ -179,10 +306,10 @@ if (!window.api) {
             window.api._notifyComplete({ filepath: data.filename });
           }, 1500);
         } else {
-          window.api._notifyError('Companion server failed to process the video.');
+          window.api._notifyError(data.error || 'Server failed to process the video.');
         }
       } catch (err) {
-        window.api._notifyError('Cannot connect to Desktop Companion Server. Please ensure you are running the backend on your PC (node server.js).');
+        window.api._notifyError('Cannot connect to server. Please ensure server.js is running.');
       }
     },
     cancelDownload: () => {},
@@ -192,6 +319,60 @@ if (!window.api) {
     openFolder: () => {},
     openFile: () => {}
   };
+}
+
+// Toggle password visibility in Auth form
+if (togglePwdBtn && authPasswordInput) {
+  togglePwdBtn.addEventListener('click', () => {
+    const isPassword = authPasswordInput.type === 'password';
+    authPasswordInput.type = isPassword ? 'text' : 'password';
+    togglePwdBtn.innerHTML = isPassword ? '<i class="fa-regular fa-eye-slash"></i>' : '<i class="fa-regular fa-eye"></i>';
+  });
+}
+
+// Auth Form Submit Listener
+if (authForm && authPasswordInput) {
+  authForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pwd = authPasswordInput.value.trim();
+    if (!pwd) return;
+
+    if (authSubmitBtn) {
+      authSubmitBtn.disabled = true;
+      authSubmitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+    }
+    if (authError) authError.classList.add('hidden');
+
+    const result = await verifyPasswordWithServer(pwd);
+    if (result.success) {
+      setStoredAuthToken(result.token || pwd);
+      if (authScreen) authScreen.classList.add('hidden');
+      if (appContainer) appContainer.classList.remove('hidden');
+      updateAuthUi(true);
+      if (!_appInitialized) {
+        _appInitialized = true;
+        initializeMainApp();
+      }
+    } else {
+      if (authError) {
+        if (authErrorText) authErrorText.textContent = result.error || 'Incorrect password.';
+        authError.classList.remove('hidden');
+      }
+      authPasswordInput.focus();
+    }
+
+    if (authSubmitBtn) {
+      authSubmitBtn.disabled = false;
+      authSubmitBtn.innerHTML = '<i class="fa-solid fa-lock-open"></i> Unlock Downloader';
+    }
+  });
+}
+
+// Lock Server / Log Out Button
+if (lockServerBtn) {
+  lockServerBtn.addEventListener('click', () => {
+    showAuthScreen();
+  });
 }
 
 // Startup Handler
@@ -204,11 +385,22 @@ window.api.onSetupStatus((data) => {
     if (setupSubtitle) setupSubtitle.textContent = 'Please wait while we prepare core binaries.';
     if (setupProgressFill) setupProgressFill.style.width = `${data.percent || 0}%`;
     if (setupProgressPercent) setupProgressPercent.textContent = `${data.percent || 0}%`;
+  } else if (data.stage === 'auth-required') {
+    if (setupScreen) setupScreen.classList.add('hidden');
+    if (appContainer) appContainer.classList.add('hidden');
+    if (authScreen) {
+      authScreen.classList.remove('hidden');
+      if (authPasswordInput) {
+        authPasswordInput.value = '';
+        authPasswordInput.focus();
+      }
+    }
   } else if (data.stage === 'ready') {
+    if (setupScreen) setupScreen.classList.add('hidden');
+    if (authScreen) authScreen.classList.add('hidden');
+    if (appContainer) appContainer.classList.remove('hidden');
     if (_appInitialized) return; // Guard: prevent double init
     _appInitialized = true;
-    if (setupScreen) setupScreen.classList.add('hidden');
-    if (appContainer) appContainer.classList.remove('hidden');
     initializeMainApp();
   } else if (data.stage === 'error') {
     if (setupLoader) setupLoader.classList.add('hidden');
@@ -219,9 +411,13 @@ window.api.onSetupStatus((data) => {
   }
 });
 
-setupRetryBtn.addEventListener('click', () => {
-  window.api.retrySetup();
-});
+if (setupRetryBtn) {
+  setupRetryBtn.addEventListener('click', () => {
+    if (window.api && typeof window.api.retrySetup === 'function') {
+      window.api.retrySetup();
+    }
+  });
+}
 
 // Setup Main UI Interaction
 async function initializeMainApp() {

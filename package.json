@@ -6,6 +6,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "server": "node server.js",
     "dist": "electron-packager . \"YT Downloader Pro\" --platform=win32 --arch=x64 --out=dist --overwrite --asar.unpack=\"**/node_modules/ffmpeg-static/**/*\"",
     "build": "electron-builder"
   },
