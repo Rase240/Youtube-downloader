@@ -58,9 +58,9 @@ function generateOutputFilename(originalPath, namingStrategy, customName) {
     return `${sanitizedBase}_obfuscated${ext}`;
   }
 
-  // Default: randomized project hash
-  const randomId = Math.floor(10000 + Math.random() * 90000);
-  return `project_${randomId}${ext}`;
+  // Default: randomized project hash with zero source filename leakage
+  const randomHex = crypto.randomBytes(6).toString('hex');
+  return `project_${randomHex}${ext}`;
 }
 
 /**

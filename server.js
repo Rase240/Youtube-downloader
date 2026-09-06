@@ -584,10 +584,25 @@ app.post('/api/obfuscate-upload', checkAuth, (req, res) => {
       const rawTime = req.headers['x-timestamp-mode'] || req.query.timestampMode;
       const timestampMode = allowedTimestamps.includes(rawTime) ? rawTime : 'random-past';
 
-      // Always enforce cryptographic random naming on remote server to protect against file enumeration
+      const rawNaming = req.headers['x-naming-strategy'] || req.query.namingStrategy;
+      const rawCustom = req.headers['x-custom-name'] || req.query.customName;
+      let decodedCustom = '';
+      if (rawCustom) {
+        try { decodedCustom = decodeURIComponent(rawCustom); } catch (e) { decodedCustom = rawCustom; }
+      }
+
+      // Generate clean filename based on naming strategy:
       const randHex = crypto.randomBytes(8).toString('hex');
-      const baseWithoutExt = path.basename(sanitizedFilename, ext).slice(0, 30);
-      const serverFilename = `proj_${randHex}_${baseWithoutExt}`;
+      let serverFilename;
+      if (rawNaming === 'suffix') {
+        const baseWithoutExt = path.basename(sanitizedFilename, ext).slice(0, 40);
+        serverFilename = `${baseWithoutExt}_obfuscated`;
+      } else if (rawNaming === 'custom' && decodedCustom.trim()) {
+        serverFilename = decodedCustom.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+      } else {
+        // Default / 'random': PURE random hash, ZERO original filename trace
+        serverFilename = `proj_${randHex}`;
+      }
 
       const options = {
         signatureKey,

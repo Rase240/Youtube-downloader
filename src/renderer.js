@@ -1071,6 +1071,9 @@ function handleSelectedMediaFile(info) {
     obfSavePath.value = parentDir || '';
   }
 
+  if (obfDropZone) {
+    obfDropZone.classList.add('hidden');
+  }
   if (obfDetailsPanel) {
     obfDetailsPanel.classList.remove('hidden');
     obfDetailsPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1230,11 +1233,21 @@ if (obfBrowseDirBtn) {
 // Change file button
 if (obfChangeFileBtn) {
   obfChangeFileBtn.addEventListener('click', () => {
+    if (obfFileInput) obfFileInput.click();
+  });
+}
+
+// Remove file button
+if (obfRemoveFileBtn) {
+  obfRemoveFileBtn.addEventListener('click', () => {
     currentObfFile = null;
+    currentObfResult = null;
+    if (obfFileInput) obfFileInput.value = '';
     if (obfDetailsPanel) obfDetailsPanel.classList.add('hidden');
     if (obfProgressPanel) obfProgressPanel.classList.add('hidden');
     if (obfCompletePanel) obfCompletePanel.classList.add('hidden');
-    if (obfDropZone) obfDropZone.click();
+    if (obfErrorMessage) obfErrorMessage.classList.add('hidden');
+    if (obfDropZone) obfDropZone.classList.remove('hidden');
   });
 }
 
@@ -1244,7 +1257,8 @@ if (obfForm) {
     e.preventDefault();
     if (!currentObfFile) return;
 
-    const signatureKey = obfSignatureSelect ? obfSignatureSelect.value : 'adobe-premiere';
+    const signatureRadio = document.querySelector('input[name="obf-signature"]:checked');
+    const signatureKey = signatureRadio ? signatureRadio.value : (obfSignatureSelect ? obfSignatureSelect.value : 'adobe-premiere');
     const timestampModeRadio = document.querySelector('input[name="obf-timestamp-mode"]:checked');
     const timestampMode = timestampModeRadio ? timestampModeRadio.value : 'random-past';
     const namingRadio = document.querySelector('input[name="obf-naming-strategy"]:checked');
@@ -1463,11 +1477,12 @@ if (obfResetBtn) {
   obfResetBtn.addEventListener('click', () => {
     currentObfFile = null;
     currentObfResult = null;
+    if (obfFileInput) obfFileInput.value = '';
     if (obfCompletePanel) obfCompletePanel.classList.add('hidden');
     if (obfProgressPanel) obfProgressPanel.classList.add('hidden');
     if (obfDetailsPanel) obfDetailsPanel.classList.add('hidden');
     if (obfErrorMessage) obfErrorMessage.classList.add('hidden');
-    if (obfDropZone) obfDropZone.focus();
+    if (obfDropZone) obfDropZone.classList.remove('hidden');
   });
 }
 

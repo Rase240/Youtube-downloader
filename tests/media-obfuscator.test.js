@@ -386,9 +386,10 @@ describe('Local Media Obfuscator - Comprehensive Suite', () => {
       assert.strictEqual(json.success, true);
       assert.ok(json.downloadUrl.startsWith('/api/file/'));
 
-      // Verify filename is high-entropy / unpredictable (contains proj_<hex>_)
+      // Verify filename is high-entropy and NEVER contains original filename
       assert.ok(json.filename.startsWith('proj_'), 'Filename prefixed with proj_');
       assert.ok(json.filename.length > 20, 'Filename contains cryptographic entropy');
+      assert.strictEqual(json.filename.includes('sensitive_camera_raw'), false, 'Output filename must NEVER leak original input filename');
 
       // Verify download of clean file works with authentication
       const dlRes = await httpRequest({
