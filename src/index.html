@@ -3,36 +3,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="description" content="Download YouTube & Instagram videos with Anti-Algorithm metadata obfuscation">
+  <meta name="description" content="Download YouTube & Instagram videos with container metadata obfuscation">
   <title>YT Downloader Pro</title>
   <link rel="stylesheet" href="style.css">
-  <!-- Load Inter and Outfit fonts -->
+  <!-- Load Inter font family -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <!-- Load FontAwesome icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="icon" type="image/png" href="assets/icon.png">
 </head>
 <body>
 
-  <!-- Background decorative glows -->
-  <div class="glow-bg glow-purple"></div>
-  <div class="glow-bg glow-pink"></div>
-
   <!-- SETUP SCREEN (Shown during yt-dlp check/download on Desktop) -->
   <div id="setup-screen" class="setup-container">
-    <div class="setup-card glass">
+    <div class="setup-card">
       <div class="app-logo">
         <img src="assets/icon.png" class="app-logo-img" alt="YT Downloader Pro Icon">
-        <span>YT Downloader <span class="accent-text">Pro</span></span>
+        <span class="logo-text">YT Downloader <span class="badge-pro">PRO</span></span>
       </div>
       <div id="setup-loader" class="spinner-container">
-        <div class="double-bounce1"></div>
-        <div class="double-bounce2"></div>
+        <div class="setup-spinner"></div>
       </div>
-      <h3 id="setup-title">Checking System Components...</h3>
-      <p id="setup-subtitle" class="text-secondary">Please wait while we initialize the downloading engine.</p>
+      <h3 id="setup-title">Checking System Components</h3>
+      <p id="setup-subtitle" class="text-secondary">Initializing media downloading engines...</p>
       
       <div id="setup-progress-wrapper" class="setup-progress-bar-container hidden">
         <div class="progress-bar-track">
@@ -49,19 +44,19 @@
 
   <!-- AUTH LOCK SCREEN (Shown on Web when server password is required) -->
   <div id="auth-screen" class="setup-container hidden">
-    <div class="setup-card glass auth-card">
+    <div class="setup-card auth-card">
       <div class="app-logo">
         <img src="assets/icon.png" class="app-logo-img" alt="YT Downloader Pro Icon">
-        <span>YT Downloader <span class="accent-text">Pro</span></span>
+        <span class="logo-text">YT Downloader <span class="badge-pro">PRO</span></span>
       </div>
-      <div class="auth-shield-badge">
-        <i class="fa-solid fa-shield-halved"></i>
+      <div class="auth-icon-badge">
+        <i class="fa-solid fa-lock"></i>
       </div>
-      <h3 id="auth-title">Protected Server</h3>
-      <p id="auth-subtitle" class="text-secondary">Enter your server password to unlock video downloading.</p>
+      <h3 id="auth-title">Password Protected</h3>
+      <p id="auth-subtitle" class="text-secondary">Enter server password to access media operations.</p>
       
       <form id="auth-form" class="auth-form">
-        <div class="auth-input-wrapper">
+        <div class="input-field-wrapper">
           <i class="fa-solid fa-key input-icon"></i>
           <input 
             type="password" 
@@ -88,237 +83,490 @@
   <!-- MAIN APP CONTAINER -->
   <div id="app-container" class="main-layout hidden">
     
-    <!-- Sidebar / Top Branding Header -->
+    <!-- Desktop Top Header & Segmented Navigation -->
     <header class="app-header">
-      <div class="app-logo">
-        <img src="assets/icon.png" class="app-logo-img animate-pulse" alt="YT Downloader Pro Icon">
-        <span>YT Downloader <span class="accent-text">Pro</span></span>
-      </div>
-      <div id="header-auth-badge" class="header-auth-badge hidden">
-        <button id="lock-server-btn" class="header-action-btn" title="Sign Out / Lock Downloader">
-          <i class="fa-solid fa-lock"></i>
-          <span class="btn-text">Lock</span>
-        </button>
+      <div class="header-inner">
+        <div class="app-logo">
+          <img src="assets/icon.png" class="app-logo-img" alt="YT Downloader Pro Icon">
+          <span class="logo-text">YT Downloader <span class="badge-pro">PRO</span></span>
+        </div>
+
+        <!-- Desktop Segmented Navigation Control -->
+        <nav class="segmented-nav" role="tablist" aria-label="Application Sections">
+          <button type="button" class="seg-tab active" id="tab-downloader-btn" role="tab" aria-selected="true">
+            <i class="fa-solid fa-cloud-arrow-down"></i>
+            <span>Downloader</span>
+          </button>
+          <button type="button" class="seg-tab" id="tab-obfuscator-btn" role="tab" aria-selected="false">
+            <i class="fa-solid fa-shield-halved"></i>
+            <span>Media Obfuscator</span>
+          </button>
+          <button type="button" class="seg-tab" id="tab-history-btn" role="tab" aria-selected="false">
+            <i class="fa-solid fa-clock-rotate-left"></i>
+            <span>History</span>
+          </button>
+        </nav>
+
+        <div id="header-auth-badge" class="header-actions hidden">
+          <button id="lock-server-btn" class="btn btn-ghost btn-sm" title="Lock Session">
+            <i class="fa-solid fa-lock"></i>
+            <span>Lock</span>
+          </button>
+        </div>
       </div>
     </header>
 
     <main class="app-content">
       
-      <!-- Input Panel -->
-      <section class="card glass search-card">
-        <h2>Download YouTube & Instagram Videos</h2>
-        <p class="card-subtitle text-secondary">Paste a link below to analyze and download in high quality with metadata obfuscation.</p>
+      <!-- 1. DOWNLOADER VIEW -->
+      <div id="downloader-view" class="view-panel">
         
-        <form id="url-form" class="search-form">
-          <div class="input-group">
-            <div class="input-field-wrapper">
-              <i class="fa-solid fa-link input-icon"></i>
-              <input 
-                type="url" 
-                id="video-url" 
-                placeholder="Paste YouTube or Instagram link..." 
-                required
-                autocomplete="off"
-              >
-            </div>
-            <div class="input-actions-row">
-              <button type="button" id="paste-btn" class="btn btn-secondary btn-paste" title="Paste from Clipboard">
-                <i class="fa-solid fa-paste"></i> Paste
+        <!-- Input Search Card -->
+        <section class="card">
+          <div class="section-heading">
+            <h2>Download Media</h2>
+            <p class="text-secondary">Paste a YouTube or Instagram link to download video or extract audio.</p>
+          </div>
+          
+          <form id="url-form" class="search-form">
+            <div class="input-row">
+              <div class="input-field-wrapper flex-grow">
+                <i class="fa-solid fa-link input-icon"></i>
+                <input 
+                  type="url" 
+                  id="video-url" 
+                  placeholder="Paste YouTube or Instagram link here..." 
+                  required
+                  autocomplete="off"
+                  spellcheck="false"
+                >
+              </div>
+              <button type="button" id="paste-btn" class="btn btn-secondary" title="Paste from Clipboard">
+                <i class="fa-solid fa-paste"></i>
+                <span>Paste</span>
               </button>
               <button type="submit" id="analyze-btn" class="btn btn-primary">
-                <i class="fa-solid fa-magnifying-glass"></i> Analyze
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <span>Analyze</span>
               </button>
             </div>
-          </div>
-        </form>
-        <div id="error-message" class="error-msg hidden"></div>
-      </section>
+          </form>
+          <div id="error-message" class="error-msg hidden"></div>
+        </section>
 
-      <!-- Video Details & Formats Panel (Hidden initially) -->
-      <section id="details-panel" class="card glass details-card hidden">
-        <div class="details-grid">
-          
-          <!-- Column 1: Thumbnail & Metadata -->
-          <div class="video-preview">
-            <div class="thumbnail-wrapper">
-              <div id="video-thumbnail-bg" class="thumbnail-blur-bg"></div>
-              <img id="video-thumbnail" src="" alt="Video Thumbnail">
-              <span id="video-duration" class="duration-badge">00:00</span>
-              <div class="shield-badge" title="Anti-Algorithm Metadata Obfuscation Active">
-                <i class="fa-solid fa-user-shield"></i> Shield Active
+        <!-- Video Details & Formats Panel (Hidden initially) -->
+        <section id="details-panel" class="card details-card hidden">
+          <div class="details-grid">
+            
+            <!-- Media Preview -->
+            <div class="media-preview-box">
+              <div class="thumbnail-container">
+                <div id="video-thumbnail-bg" class="thumbnail-blur-bg"></div>
+                <img id="video-thumbnail" src="" alt="Video Thumbnail">
+                <span id="video-duration" class="duration-badge">00:00</span>
               </div>
-            </div>
-            <div class="video-meta">
-              <h3 id="video-title">Video Title</h3>
-              <p id="video-channel" class="text-secondary"><i class="fa-solid fa-circle-check channel-verify"></i> Channel Name</p>
-              <div class="stat-badges">
-                <span id="video-views" class="stat-badge"><i class="fa-solid fa-eye"></i> 0 views</span>
-                <span id="video-date" class="stat-badge"><i class="fa-solid fa-calendar"></i> Date</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Column 2: Selection & Download -->
-          <div class="download-settings">
-            <div class="settings-group">
-              <label for="format-type"><i class="fa-solid fa-sliders"></i> Download Type</label>
-              <div class="radio-toggle-group">
-                <input type="radio" id="type-video" name="download-type" value="video" checked>
-                <label for="type-video"><i class="fa-solid fa-video"></i> Video</label>
-
-                <input type="radio" id="type-audio" name="download-type" value="audio">
-                <label for="type-audio"><i class="fa-solid fa-music"></i> Audio (MP3)</label>
-              </div>
-            </div>
-
-            <!-- Video Format Toggle -->
-            <div class="settings-group" id="video-format-group">
-              <label><i class="fa-solid fa-box"></i> Video Format</label>
-              <div class="radio-toggle-group">
-                <input type="radio" id="format-mp4" name="video-format" value="mp4" checked>
-                <label for="format-mp4">MP4</label>
-
-                <input type="radio" id="format-webm" name="video-format" value="webm">
-                <label for="format-webm">WebM</label>
-              </div>
-            </div>
-
-            <!-- Quality Select (Interactive Pills + Select) -->
-            <div class="settings-group" id="quality-group">
-              <label for="quality-select"><i class="fa-solid fa-circle-chevron-down"></i> Resolution Quality</label>
-              <div id="quality-pills" class="quality-pills-container">
-                <!-- Loaded dynamically -->
-              </div>
-              <select id="quality-select" class="custom-select hidden">
-                <!-- Hidden fallback for select -->
-              </select>
-            </div>
-
-            <!-- Anti-Algorithm Metadata Obfuscation Toggle -->
-            <div class="settings-group">
-              <label class="toggle-option-box">
-                <div class="toggle-option-info">
-                  <span class="toggle-option-title"><i class="fa-solid fa-user-shield"></i> Anti-Algorithm Obfuscation</span>
-                  <span class="toggle-option-desc">Strips metadata & renames file to project_XXXX.mp4</span>
+              <div class="media-meta">
+                <h3 id="video-title" class="media-title">Video Title</h3>
+                <p id="video-channel" class="media-author text-secondary"><i class="fa-solid fa-circle-check text-accent"></i> Channel Name</p>
+                <div class="stat-badges">
+                  <span id="video-views" class="stat-badge"><i class="fa-solid fa-eye"></i> 0 views</span>
+                  <span id="video-date" class="stat-badge"><i class="fa-solid fa-calendar"></i> Date</span>
                 </div>
-                <input type="checkbox" id="obfuscate-toggle" class="toggle-input" checked>
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-
-            <!-- Directory Selector -->
-            <div class="settings-group">
-              <label><i class="fa-solid fa-folder-open"></i> Save Location</label>
-              <div class="directory-selector">
-                <input type="text" id="save-path" readonly>
-                <button type="button" id="browse-btn" class="btn btn-secondary">Browse</button>
               </div>
             </div>
 
-            <!-- Download Button -->
-            <button id="download-btn" class="btn btn-primary btn-large btn-block">
-              <i class="fa-solid fa-download"></i> Download
+            <!-- Settings & Configuration Column -->
+            <div class="download-settings">
+              <!-- Download Type (Video / Audio) -->
+              <div class="settings-group">
+                <label class="settings-label"><i class="fa-solid fa-sliders"></i> Stream Type</label>
+                <div class="segmented-control">
+                  <input type="radio" id="type-video" name="download-type" value="video" checked>
+                  <label for="type-video"><i class="fa-solid fa-video"></i> Video</label>
+
+                  <input type="radio" id="type-audio" name="download-type" value="audio">
+                  <label for="type-audio"><i class="fa-solid fa-music"></i> Audio (MP3)</label>
+                </div>
+              </div>
+
+              <!-- Video Container Format -->
+              <div class="settings-group" id="video-format-group">
+                <label class="settings-label"><i class="fa-solid fa-box"></i> Container</label>
+                <div class="segmented-control">
+                  <input type="radio" id="format-mp4" name="video-format" value="mp4" checked>
+                  <label for="format-mp4">MP4</label>
+
+                  <input type="radio" id="format-webm" name="video-format" value="webm">
+                  <label for="format-webm">WebM</label>
+                </div>
+              </div>
+
+              <!-- Quality Resolution Pills -->
+              <div class="settings-group" id="quality-group">
+                <label class="settings-label"><i class="fa-solid fa-circle-chevron-down"></i> Resolution</label>
+                <div id="quality-pills" class="quality-pills-container">
+                  <!-- Loaded dynamically -->
+                </div>
+                <select id="quality-select" class="custom-select hidden">
+                  <!-- Hidden fallback for select -->
+                </select>
+              </div>
+
+              <!-- Obfuscation Toggle -->
+              <div class="settings-group">
+                <label class="toggle-card">
+                  <div class="toggle-card-text">
+                    <span class="toggle-title"><i class="fa-solid fa-user-shield text-accent"></i> Randomize Metadata</span>
+                    <span class="toggle-desc text-muted">Strips tracking tags and randomizes filename</span>
+                  </div>
+                  <input type="checkbox" id="obfuscate-toggle" class="toggle-input" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+
+              <!-- Directory Selector -->
+              <div class="settings-group">
+                <label class="settings-label"><i class="fa-solid fa-folder-open"></i> Save Folder</label>
+                <div class="directory-selector">
+                  <input type="text" id="save-path" readonly placeholder="Default Downloads Folder">
+                  <button type="button" id="browse-btn" class="btn btn-secondary">Browse</button>
+                </div>
+              </div>
+
+              <!-- Primary Download Button -->
+              <button id="download-btn" class="btn btn-primary btn-large btn-block">
+                <i class="fa-solid fa-download"></i> Download Media
+              </button>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- Active Download Progress Panel (Hidden initially) -->
+        <section id="progress-panel" class="card progress-card hidden">
+          <div class="progress-top-row">
+            <div class="progress-info">
+              <h3 id="progress-status">Downloading...</h3>
+              <p id="progress-file-title" class="text-secondary truncate">Video Title</p>
+            </div>
+            <button id="cancel-btn" class="btn btn-ghost btn-sm" title="Cancel Download">
+              <i class="fa-solid fa-xmark"></i> Cancel
             </button>
           </div>
 
-        </div>
-      </section>
-
-      <!-- Active Download Progress Panel (Hidden initially) -->
-      <section id="progress-panel" class="card glass progress-card hidden">
-        <div class="progress-ring-header">
-          <!-- Circular SVG Progress Ring -->
-          <div class="progress-ring-wrapper">
-            <svg class="progress-ring" width="80" height="80">
-              <circle class="progress-ring-circle-bg" stroke="rgba(255,255,255,0.08)" stroke-width="6" fill="transparent" r="32" cx="40" cy="40"/>
-              <circle id="progress-ring-circle" class="progress-ring-circle" stroke="url(#progress-gradient)" stroke-width="6" stroke-linecap="round" fill="transparent" r="32" cx="40" cy="40" stroke-dasharray="201.06" stroke-dashoffset="201.06"/>
-              <defs>
-                <linearGradient id="progress-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="#00F2FE" />
-                  <stop offset="100%" stop-color="#4FACFE" />
-                </linearGradient>
-              </defs>
-            </svg>
-            <span id="download-progress-percent" class="ring-percent-text">0%</span>
+          <div class="progress-bar-wrapper">
+            <div class="progress-bar-track">
+              <div id="download-progress-fill" class="progress-bar-fill" style="width: 0%"></div>
+            </div>
+            <div class="progress-bar-meta">
+              <span id="download-progress-percent" class="progress-percent">0%</span>
+            </div>
           </div>
 
-          <div class="progress-details">
-            <h3 id="progress-status">Downloading...</h3>
-            <p id="progress-file-title" class="text-secondary truncate">Video Title</p>
+          <div class="progress-stats-grid">
+            <div class="stat-box">
+              <span class="stat-label">Speed</span>
+              <span id="stat-speed" class="stat-value">-- MB/s</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">ETA</span>
+              <span id="stat-eta" class="stat-value">--:--</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Size</span>
+              <span id="stat-size" class="stat-value">-- MB</span>
+            </div>
           </div>
+        </section>
 
-          <button id="cancel-btn" class="btn btn-danger-outline">
-            <i class="fa-solid fa-xmark"></i> Cancel
-          </button>
-        </div>
+        <!-- Complete Section (Hidden initially) -->
+        <section id="complete-panel" class="card success-card hidden">
+          <div class="success-icon-wrapper">
+            <i class="fa-solid fa-circle-check"></i>
+          </div>
+          <h2>Download Complete</h2>
+          <p id="complete-message" class="text-secondary">Your media has been downloaded successfully.</p>
+          
+          <div class="action-button-group">
+            <button id="open-file-btn" class="btn btn-primary">
+              <i class="fa-solid fa-folder-open"></i> Show in Folder
+            </button>
+            <button id="copy-path-btn" class="btn btn-secondary">
+              <i class="fa-solid fa-copy"></i> Copy Path
+            </button>
+            <button id="reset-btn" class="btn btn-ghost">
+              <i class="fa-solid fa-arrow-rotate-left"></i> Download Another
+            </button>
+          </div>
+        </section>
 
-        <div class="progress-bar-wrapper">
-          <div class="progress-bar-track">
-            <div id="download-progress-fill" class="progress-bar-fill animated-stripe" style="width: 0%"></div>
-          </div>
-        </div>
+      </div> <!-- End Downloader View -->
 
-        <div class="progress-stats-grid">
-          <div class="stat-box">
-            <span class="stat-label">Download Speed</span>
-            <span id="stat-speed" class="stat-value">-- MB/s</span>
-          </div>
-          <div class="stat-box">
-            <span class="stat-label">Estimated Time</span>
-            <span id="stat-eta" class="stat-value">--:--</span>
-          </div>
-          <div class="stat-box">
-            <span class="stat-label">File Size</span>
-            <span id="stat-size" class="stat-value">-- MB</span>
-          </div>
-        </div>
-      </section>
-
-      <!-- Complete Section (Hidden initially) -->
-      <section id="complete-panel" class="card glass success-card hidden">
-        <div class="success-icon-wrapper">
-          <i class="fa-solid fa-circle-check animate-scale"></i>
-        </div>
-        <h2>Download Complete!</h2>
-        <p id="complete-message" class="text-secondary">Your file has been saved successfully with randomized container metadata.</p>
+      <!-- 2. LOCAL MEDIA OBFUSCATOR VIEW -->
+      <div id="obfuscator-view" class="view-panel hidden">
         
-        <div class="success-actions">
-          <button id="open-file-btn" class="btn btn-primary">
-            <i class="fa-solid fa-folder-open"></i> Show in Folder
-          </button>
-          <button id="copy-path-btn" class="btn btn-secondary">
-            <i class="fa-solid fa-copy"></i> Copy File Path
-          </button>
-          <button id="reset-btn" class="btn btn-secondary">
-            <i class="fa-solid fa-arrow-rotate-left"></i> Download Another
-          </button>
-        </div>
-      </section>
+        <!-- Hero Dropzone Card -->
+        <section class="card obf-hero-card">
+          <div class="section-heading">
+            <div class="badge-row">
+              <span class="badge-pill badge-accent"><i class="fa-solid fa-shield-halved"></i> Metadata Scrubbing</span>
+              <span class="badge-pill"><i class="fa-solid fa-bolt"></i> Lossless Stream Copy</span>
+            </div>
+            <h2>Local Media Obfuscator</h2>
+            <p class="text-secondary">Select an existing video or audio file to strip identifying camera serials, EXIF, and GPS coordinates without re-encoding.</p>
+          </div>
+          
+          <!-- Interactive Drag and Drop Zone -->
+          <div id="obf-drop-zone" class="obf-drop-zone" tabindex="0" role="button" aria-label="Drop media file here or click to browse">
+            <div class="drop-zone-content">
+              <div class="drop-icon-wrapper">
+                <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
+              </div>
+              <h3 class="drop-title">Drop media file here</h3>
+              <p class="drop-subtitle text-secondary">or click to browse from device</p>
+              <div class="drop-formats">
+                <span class="format-tag">MP4</span>
+                <span class="format-tag">MOV</span>
+                <span class="format-tag">MKV</span>
+                <span class="format-tag">WebM</span>
+                <span class="format-tag">M4V</span>
+                <span class="format-tag">AVI</span>
+                <span class="format-tag">MP3</span>
+              </div>
+            </div>
+            <input type="file" id="obf-file-input" class="hidden" accept=".mp4,.m4v,.mov,.mkv,.webm,.avi,.mp3,video/*,audio/*">
+          </div>
+          <div id="obf-error-message" class="error-msg hidden"></div>
+        </section>
 
-      <!-- History Panel -->
-      <section id="history-panel" class="card glass history-card">
-        <div class="history-header">
-          <h3><i class="fa-solid fa-clock-rotate-left"></i> Recent Downloads</h3>
-          <button id="clear-history-btn" class="btn btn-link hidden">Clear All</button>
-        </div>
-        <div id="history-empty" class="history-empty-state">
-          <i class="fa-solid fa-folder-minus"></i>
-          <p>No recent downloads. Paste a link above to get started!</p>
-        </div>
-        <ul id="history-list" class="history-list">
-          <!-- Loaded dynamically from localStorage -->
-        </ul>
-      </section>
+        <!-- Selected Media File & Obfuscation Options Card (Initially hidden) -->
+        <section id="obf-details-panel" class="card details-card hidden">
+          
+          <!-- Selected File Header Card -->
+          <div class="file-card">
+            <div class="file-card-main">
+              <div class="file-icon-box" id="obf-file-icon-box">
+                <i class="fa-solid fa-file-video"></i>
+              </div>
+              <div class="file-info-col">
+                <div class="file-name-row">
+                  <h3 id="obf-filename" class="file-name truncate" title="File name">video.mp4</h3>
+                  <span id="obf-format-badge" class="badge-pill badge-accent">MP4</span>
+                </div>
+                <div class="file-specs-grid">
+                  <span id="obf-filesize" class="spec-item"><i class="fa-solid fa-hard-drive"></i> -- MB</span>
+                  <span id="obf-duration" class="spec-item"><i class="fa-solid fa-clock"></i> --:--</span>
+                  <span id="obf-resolution" class="spec-item"><i class="fa-solid fa-expand"></i> --</span>
+                  <span id="obf-codecs" class="spec-item"><i class="fa-solid fa-film"></i> --</span>
+                </div>
+              </div>
+            </div>
+            <div class="file-card-actions">
+              <button type="button" id="obf-change-file-btn" class="btn btn-secondary btn-sm" title="Select a different file">
+                <i class="fa-solid fa-arrow-rotate-left"></i> Change
+              </button>
+              <button type="button" id="obf-remove-file-btn" class="btn btn-ghost btn-sm" title="Remove selected file">
+                <i class="fa-solid fa-xmark"></i> Remove
+              </button>
+            </div>
+          </div>
+
+          <!-- Obfuscation Configuration Form -->
+          <form id="obf-form" class="obf-form">
+            <div class="settings-grid">
+              
+              <!-- Container Software Signature -->
+              <div class="settings-group">
+                <label class="settings-label" for="obf-signature-select">
+                  <i class="fa-solid fa-signature"></i> Container Software Tag (Lossless / Stream Copy)
+                </label>
+                <div class="select-wrapper">
+                  <select id="obf-signature-select" class="custom-select">
+                    <option value="adobe-premiere" selected>Adobe Premiere Pro CC 2024 (Build 24.1.0)</option>
+                    <option value="davinci-resolve">DaVinci Resolve Studio 19.0.1</option>
+                    <option value="final-cut">Apple Final Cut Pro 10.8</option>
+                    <option value="quicktime">Apple QuickTime Player 10.5</option>
+                    <option value="random">Randomize Studio Signature</option>
+                  </select>
+                </div>
+                <span class="settings-help text-muted">Injects standard container producer tags (©too, ©swr). Original video & audio streams remain untouched without re-encoding.</span>
+              </div>
+
+              <!-- Creation Timestamp Strategy -->
+              <div class="settings-group">
+                <label class="settings-label"><i class="fa-solid fa-calendar-days"></i> Creation Timestamp</label>
+                <div class="segmented-control">
+                  <input type="radio" id="obf-time-past" name="obf-timestamp-mode" value="random-past" checked>
+                  <label for="obf-time-past" title="Generates a realistic past date 1-90 days ago">
+                    <i class="fa-solid fa-dice"></i> Spoofed Past Date
+                  </label>
+
+                  <input type="radio" id="obf-time-now" name="obf-timestamp-mode" value="current">
+                  <label for="obf-time-now">
+                    <i class="fa-solid fa-clock"></i> Current Time
+                  </label>
+
+                  <input type="radio" id="obf-time-strip" name="obf-timestamp-mode" value="strip">
+                  <label for="obf-time-strip">
+                    <i class="fa-solid fa-eraser"></i> Strip Completely
+                  </label>
+                </div>
+                <span class="settings-help text-muted">A past creation date prevents automated platforms from flagging freshly duplicate media.</span>
+              </div>
+
+              <!-- Output Naming Strategy -->
+              <div class="settings-group">
+                <label class="settings-label"><i class="fa-solid fa-tag"></i> Output File Naming</label>
+                <div class="segmented-control">
+                  <input type="radio" id="obf-name-random" name="obf-naming-strategy" value="random" checked>
+                  <label for="obf-name-random">
+                    <i class="fa-solid fa-shuffle"></i> Random Hash
+                  </label>
+
+                  <input type="radio" id="obf-name-suffix" name="obf-naming-strategy" value="suffix">
+                  <label for="obf-name-suffix">
+                    <i class="fa-solid fa-font"></i> Keep Name (+ _obfuscated)
+                  </label>
+
+                  <input type="radio" id="obf-name-custom" name="obf-naming-strategy" value="custom">
+                  <label for="obf-name-custom">
+                    <i class="fa-solid fa-pen"></i> Custom Name
+                  </label>
+                </div>
+                <div id="obf-custom-name-wrapper" class="input-field-wrapper custom-name-input hidden">
+                  <input type="text" id="obf-custom-name" placeholder="Enter custom filename (without extension)...">
+                </div>
+              </div>
+
+              <!-- Desktop Output Directory (Desktop only) -->
+              <div class="settings-group" id="obf-dir-group">
+                <label class="settings-label"><i class="fa-solid fa-folder-open"></i> Destination Folder</label>
+                <div class="directory-selector">
+                  <input type="text" id="obf-save-path" readonly placeholder="Same folder as original (default)">
+                  <button type="button" id="obf-browse-dir-btn" class="btn btn-secondary">Browse</button>
+                </div>
+                <span class="settings-help text-muted"><i class="fa-solid fa-lock text-success"></i> Original source file is guaranteed 100% safe and will never be modified or overwritten.</span>
+              </div>
+
+            </div>
+
+            <!-- Start Obfuscation Action Button -->
+            <button type="submit" id="obf-start-btn" class="btn btn-primary btn-large btn-block obf-action-btn">
+              <i class="fa-solid fa-shield-halved"></i> Obfuscate Media Now
+            </button>
+          </form>
+        </section>
+
+        <!-- Obfuscation Staged Progress Panel (Initially hidden) -->
+        <section id="obf-progress-panel" class="card progress-card hidden">
+          <div class="progress-top-row">
+            <div class="progress-info">
+              <h3 id="obf-progress-stage">Processing Media...</h3>
+              <p id="obf-progress-subtext" class="text-secondary">Applying container-level stream copy & stripping tracking tags...</p>
+            </div>
+            <div class="stage-spinner"></div>
+          </div>
+
+          <!-- 4-Step Technical Stage Tracker -->
+          <div class="stage-tracker">
+            <div class="stage-step active" id="step-prepare">
+              <span class="step-num">1</span>
+              <span class="step-label">Analyze</span>
+            </div>
+            <div class="stage-step" id="step-strip">
+              <span class="step-num">2</span>
+              <span class="step-label">Strip Tags</span>
+            </div>
+            <div class="stage-step" id="step-spoof">
+              <span class="step-num">3</span>
+              <span class="step-label">Spoof Signature</span>
+            </div>
+            <div class="stage-step" id="step-validate">
+              <span class="step-num">4</span>
+              <span class="step-label">Validate</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Obfuscation Complete Panel (Initially hidden) -->
+        <section id="obf-complete-panel" class="card success-card hidden">
+          <div class="success-icon-wrapper">
+            <i class="fa-solid fa-circle-check"></i>
+          </div>
+          <h2>Media Ready</h2>
+          <p id="obf-complete-message" class="text-secondary">A clean copy was generated with stripped tracking metadata and spoofed signatures. Your original file remains untouched.</p>
+          
+          <div class="result-summary-box" id="obf-result-summary">
+            <div class="result-summary-row">
+              <span class="result-label">Output File</span>
+              <strong id="obf-result-filename" class="result-value text-accent truncate">project_12345.mp4</strong>
+            </div>
+            <div class="result-summary-row" id="obf-result-path-row">
+              <span class="result-label">Location</span>
+              <span id="obf-result-path" class="result-value text-muted truncate">/path/to/project_12345.mp4</span>
+            </div>
+          </div>
+
+          <div class="action-button-group">
+            <button id="obf-open-file-btn" class="btn btn-primary">
+              <i class="fa-solid fa-folder-open"></i> Show in Folder
+            </button>
+            <button id="obf-download-btn" class="btn btn-primary hidden">
+              <i class="fa-solid fa-download"></i> Download Clean File
+            </button>
+            <button id="obf-copy-path-btn" class="btn btn-secondary">
+              <i class="fa-solid fa-copy"></i> Copy Path
+            </button>
+            <button id="obf-reset-btn" class="btn btn-ghost">
+              <i class="fa-solid fa-arrow-rotate-left"></i> Obfuscate Another
+            </button>
+          </div>
+        </section>
+
+      </div> <!-- End Obfuscator View -->
+
+      <!-- 3. HISTORY VIEW -->
+      <div id="history-view" class="view-panel hidden">
+        <section id="history-panel" class="card history-card">
+          <div class="history-header">
+            <div class="section-heading">
+              <h2>Activity History</h2>
+              <p class="text-secondary">Recent downloads and obfuscated media operations.</p>
+            </div>
+            <button id="clear-history-btn" class="btn btn-ghost btn-sm hidden">
+              <i class="fa-solid fa-trash-can"></i> Clear All
+            </button>
+          </div>
+          
+          <div id="history-empty" class="history-empty-state">
+            <div class="empty-icon-wrapper">
+              <i class="fa-solid fa-clock-rotate-left"></i>
+            </div>
+            <h3>No Recent Activity</h3>
+            <p class="text-secondary">Completed downloads and obfuscated media files will appear here.</p>
+          </div>
+          
+          <ul id="history-list" class="history-list">
+            <!-- Loaded dynamically from localStorage -->
+          </ul>
+        </section>
+      </div>
 
     </main>
 
-    <!-- Native Mobile Bottom Navigation Bar (Material 3 Style) -->
+    <!-- Native Mobile Bottom Navigation Bar (Phone view only) -->
     <nav class="mobile-bottom-nav">
       <button type="button" class="nav-item active" id="nav-downloader-btn">
         <div class="nav-icon-wrapper">
           <i class="fa-solid fa-cloud-arrow-down"></i>
         </div>
         <span>Downloader</span>
+      </button>
+      <button type="button" class="nav-item" id="nav-obfuscator-btn">
+        <div class="nav-icon-wrapper">
+          <i class="fa-solid fa-shield-halved"></i>
+        </div>
+        <span>Obfuscator</span>
       </button>
       <button type="button" class="nav-item" id="nav-history-btn">
         <div class="nav-icon-wrapper">

@@ -5,6 +5,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const ffmpeg = require('ffmpeg-static');
+const { probeMediaInfo, processMediaObfuscation, SUPPORTED_EXTENSIONS } = require('./media-obfuscator');
 
 // Optional: Load environment variables from .env file if it exists
 const envFile = path.join(__dirname, '.env');
@@ -109,23 +110,43 @@ const ffmpegBin = resolvedFfmpeg || 'ffmpeg';
 if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir, { recursive: true });
 }
+const uploadTempDir = path.join(downloadsDir, '.uploads_temp');
+if (!fs.existsSync(uploadTempDir)) {
+  fs.mkdirSync(uploadTempDir, { recursive: true });
+}
 
 // Automatic cleanup: Purge files older than 60 minutes every 15 minutes to preserve VPS disk
 setInterval(() => {
   try {
-    if (!fs.existsSync(downloadsDir)) return;
     const now = Date.now();
     const maxAge = 60 * 60 * 1000; // 60 mins
-    const files = fs.readdirSync(downloadsDir);
-    for (const file of files) {
-      const filePath = path.join(downloadsDir, file);
-      try {
-        const stats = fs.statSync(filePath);
-        if (stats.isFile() && (now - stats.mtimeMs > maxAge)) {
-          fs.unlinkSync(filePath);
-          console.log(`[Cleaner] Auto-deleted old download: ${file}`);
-        }
-      } catch (e) { }
+
+    if (fs.existsSync(downloadsDir)) {
+      const files = fs.readdirSync(downloadsDir);
+      for (const file of files) {
+        const filePath = path.join(downloadsDir, file);
+        try {
+          const stats = fs.statSync(filePath);
+          if (stats.isFile() && (now - stats.mtimeMs > maxAge)) {
+            fs.unlinkSync(filePath);
+            console.log(`[Cleaner] Auto-deleted old download: ${file}`);
+          }
+        } catch (e) { }
+      }
+    }
+
+    if (fs.existsSync(uploadTempDir)) {
+      const tempFiles = fs.readdirSync(uploadTempDir);
+      for (const tf of tempFiles) {
+        const tfPath = path.join(uploadTempDir, tf);
+        try {
+          const stats = fs.statSync(tfPath);
+          if (stats.isFile() && (now - stats.mtimeMs > 15 * 60 * 1000)) { // 15 mins for orphaned uploads
+            fs.unlinkSync(tfPath);
+            console.log(`[Cleaner] Auto-deleted orphaned upload temp: ${tf}`);
+          }
+        } catch (e) { }
+      }
     }
   } catch (e) {
     console.warn('[Cleaner] Error during auto-cleanup:', e.message);
@@ -440,6 +461,162 @@ app.get('/api/file/:filename', checkAuth, (req, res) => {
     res.status(404).json({ error: 'File not found' });
   }
 });
+
+// Local Media Obfuscation Upload Endpoint (Protected, Streaming, Strict Size Limit)
+const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // 500 MB limit for remote uploads
+const MAX_CONCURRENT_UPLOADS = 3;
+let activeUploads = 0;
+const { pipeline, Transform } = require('stream');
+
+app.post('/api/obfuscate-upload', checkAuth, (req, res) => {
+  if (activeUploads >= MAX_CONCURRENT_UPLOADS) {
+    return res.status(429).json({
+      error: 'Server is currently busy processing other media uploads. Please try again in a few moments.'
+    });
+  }
+
+  activeUploads++;
+  let slotReleased = false;
+  const releaseSlot = () => {
+    if (!slotReleased) {
+      slotReleased = true;
+      activeUploads = Math.max(0, activeUploads - 1);
+    }
+  };
+
+  res.on('finish', releaseSlot);
+  res.on('close', releaseSlot);
+
+  const rawFilename = req.headers['x-filename'] || req.query.filename || 'media.mp4';
+  let decodedFilename = 'media.mp4';
+  try {
+    decodedFilename = decodeURIComponent(rawFilename);
+  } catch (uriErr) {
+    decodedFilename = 'media.mp4';
+  }
+
+  let sanitizedFilename = path.basename(decodedFilename).replace(/[^a-zA-Z0-9._-]/g, '_');
+  if (!sanitizedFilename || sanitizedFilename === '.' || sanitizedFilename === '..') {
+    sanitizedFilename = 'media.mp4';
+  }
+
+  const ext = path.extname(sanitizedFilename).toLowerCase();
+  if (!SUPPORTED_EXTENSIONS.has(ext)) {
+    return res.status(400).json({
+      error: `Unsupported format "${ext}". Supported formats: ${Array.from(SUPPORTED_EXTENSIONS).join(', ')}`
+    });
+  }
+
+  const declaredLength = parseInt(req.headers['content-length'], 10);
+  if (declaredLength === 0) {
+    return res.status(400).json({ error: 'Uploaded file is empty.' });
+  }
+  if (declaredLength && declaredLength > MAX_UPLOAD_BYTES) {
+    return res.status(413).json({ error: 'File exceeds maximum upload size of 500 MB.' });
+  }
+
+  const uploadId = crypto.randomBytes(8).toString('hex');
+  const tempInputPath = path.join(uploadTempDir, `upload_${uploadId}${ext}`);
+  const writeStream = fs.createWriteStream(tempInputPath);
+
+  const cleanupTemp = () => {
+    try {
+      if (fs.existsSync(tempInputPath)) fs.unlinkSync(tempInputPath);
+    } catch (e) { }
+  };
+
+  // Abort / timeout handlers
+  req.on('aborted', () => {
+    writeStream.destroy();
+    cleanupTemp();
+    releaseSlot();
+  });
+
+  req.on('close', () => {
+    if (!req.complete) {
+      writeStream.destroy();
+      cleanupTemp();
+      releaseSlot();
+    }
+  });
+
+  req.setTimeout(10 * 60 * 1000, () => {
+    writeStream.destroy();
+    cleanupTemp();
+    releaseSlot();
+    if (!res.headersSent) res.status(408).json({ error: 'Upload timed out.' });
+  });
+
+  // Byte size tracking & enforcement Transform stream
+  let uploadedBytes = 0;
+  const sizeLimiter = new Transform({
+    transform(chunk, encoding, callback) {
+      uploadedBytes += chunk.length;
+      if (uploadedBytes > MAX_UPLOAD_BYTES) {
+        callback(new Error('File exceeds maximum upload size of 500 MB.'));
+      } else {
+        callback(null, chunk);
+      }
+    }
+  });
+
+  pipeline(req, sizeLimiter, writeStream, async (err) => {
+    if (err) {
+      cleanupTemp();
+      releaseSlot();
+      if (!res.headersSent) {
+        if (err.message && err.message.includes('maximum upload size')) {
+          res.status(413).json({ error: err.message });
+        } else {
+          res.status(500).json({ error: `Upload stream error: ${err.message}` });
+        }
+      }
+      return;
+    }
+
+    // Stream finished writing to disk safely! Execute obfuscation:
+    try {
+      const allowedSignatures = ['adobe-premiere', 'davinci-resolve', 'final-cut', 'quicktime', 'random'];
+      const rawSig = req.headers['x-signature'] || req.query.signature;
+      const signatureKey = allowedSignatures.includes(rawSig) ? rawSig : 'adobe-premiere';
+
+      const allowedTimestamps = ['random-past', 'current', 'strip'];
+      const rawTime = req.headers['x-timestamp-mode'] || req.query.timestampMode;
+      const timestampMode = allowedTimestamps.includes(rawTime) ? rawTime : 'random-past';
+
+      // Always enforce cryptographic random naming on remote server to protect against file enumeration
+      const randHex = crypto.randomBytes(8).toString('hex');
+      const baseWithoutExt = path.basename(sanitizedFilename, ext).slice(0, 30);
+      const serverFilename = `proj_${randHex}_${baseWithoutExt}`;
+
+      const options = {
+        signatureKey,
+        timestampMode,
+        namingStrategy: 'custom',
+        customName: serverFilename
+      };
+
+      const result = await processMediaObfuscation(ffmpegBin, tempInputPath, downloadsDir, options);
+      cleanupTemp();
+      releaseSlot();
+
+      res.json({
+        success: true,
+        filename: result.filename,
+        sizeFormatted: result.sizeFormatted,
+        downloadUrl: `/api/file/${encodeURIComponent(result.filename)}`
+      });
+    } catch (procErr) {
+      cleanupTemp();
+      releaseSlot();
+      if (!res.headersSent) {
+        res.status(500).json({ error: procErr.message || 'Obfuscation processing failed.' });
+      }
+    }
+  });
+});
+
+
 
 app.listen(PORT, () => {
   console.log(`\n======================================================`);

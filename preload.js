@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   // Setup & updates
@@ -21,5 +21,19 @@ contextBridge.exposeInMainWorld('api', {
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   openFolder: (path) => ipcRenderer.send('open-folder', path),
   openFile: (path) => ipcRenderer.send('open-file', path),
-  saveMetadataFile: (data) => ipcRenderer.invoke('save-metadata-file', data)
+  saveMetadataFile: (data) => ipcRenderer.invoke('save-metadata-file', data),
+
+  // Local Media Obfuscator APIs
+  getFilePathForDroppedFile: (file) => {
+    try {
+      return webUtils ? webUtils.getPathForFile(file) : (file.path || '');
+    } catch (e) {
+      return file.path || '';
+    }
+  },
+  selectMediaFile: () => ipcRenderer.invoke('select-media-file'),
+  probeMediaFile: (filePath) => ipcRenderer.invoke('probe-media-file', filePath),
+  obfuscateLocalFile: (options) => ipcRenderer.invoke('obfuscate-local-file', options),
+  onObfuscateProgress: (callback) => ipcRenderer.on('obfuscate-progress', (event, data) => callback(data))
 });
+
