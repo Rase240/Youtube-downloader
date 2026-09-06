@@ -379,19 +379,36 @@
               
               <!-- Container Software Signature -->
               <div class="settings-group">
-                <label class="settings-label" for="obf-signature-select">
-                  <i class="fa-solid fa-signature"></i> Container Software Tag (Lossless / Stream Copy)
+                <label class="settings-label">
+                  <i class="fa-solid fa-signature"></i> Container Software Tag
                 </label>
-                <div class="select-wrapper">
-                  <select id="obf-signature-select" class="custom-select">
-                    <option value="adobe-premiere" selected>Adobe Premiere Pro CC 2024 (Build 24.1.0)</option>
-                    <option value="davinci-resolve">DaVinci Resolve Studio 19.0.1</option>
-                    <option value="final-cut">Apple Final Cut Pro 10.8</option>
-                    <option value="quicktime">Apple QuickTime Player 10.5</option>
-                    <option value="random">Randomize Studio Signature</option>
-                  </select>
+                <div class="segmented-chips-grid">
+                  <input type="radio" id="obf-sig-premiere" name="obf-signature" value="adobe-premiere" checked>
+                  <label for="obf-sig-premiere">
+                    <i class="fa-solid fa-clapperboard"></i> Premiere Pro
+                  </label>
+
+                  <input type="radio" id="obf-sig-davinci" name="obf-signature" value="davinci-resolve">
+                  <label for="obf-sig-davinci">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> DaVinci
+                  </label>
+
+                  <input type="radio" id="obf-sig-finalcut" name="obf-signature" value="final-cut">
+                  <label for="obf-sig-finalcut">
+                    <i class="fa-brands fa-apple"></i> Final Cut
+                  </label>
+
+                  <input type="radio" id="obf-sig-quicktime" name="obf-signature" value="quicktime">
+                  <label for="obf-sig-quicktime">
+                    <i class="fa-solid fa-play"></i> QuickTime
+                  </label>
+
+                  <input type="radio" id="obf-sig-random" name="obf-signature" value="random">
+                  <label for="obf-sig-random">
+                    <i class="fa-solid fa-dice"></i> Random
+                  </label>
                 </div>
-                <span class="settings-help text-muted">Injects standard container producer tags (©too, ©swr). Original video & audio streams remain untouched without re-encoding.</span>
+                <span class="settings-help text-muted">Injects standard container producer tags (©too, ©swr). Stream data remains untouched without re-encoding.</span>
               </div>
 
               <!-- Creation Timestamp Strategy -->
@@ -400,7 +417,7 @@
                 <div class="segmented-control">
                   <input type="radio" id="obf-time-past" name="obf-timestamp-mode" value="random-past" checked>
                   <label for="obf-time-past" title="Generates a realistic past date 1-90 days ago">
-                    <i class="fa-solid fa-dice"></i> Spoofed Past Date
+                    <i class="fa-solid fa-dice"></i> Spoofed Date
                   </label>
 
                   <input type="radio" id="obf-time-now" name="obf-timestamp-mode" value="current">
@@ -410,7 +427,7 @@
 
                   <input type="radio" id="obf-time-strip" name="obf-timestamp-mode" value="strip">
                   <label for="obf-time-strip">
-                    <i class="fa-solid fa-eraser"></i> Strip Completely
+                    <i class="fa-solid fa-eraser"></i> Strip Date
                   </label>
                 </div>
                 <span class="settings-help text-muted">A past creation date prevents automated platforms from flagging freshly duplicate media.</span>
@@ -421,13 +438,13 @@
                 <label class="settings-label"><i class="fa-solid fa-tag"></i> Output File Naming</label>
                 <div class="segmented-control">
                   <input type="radio" id="obf-name-random" name="obf-naming-strategy" value="random" checked>
-                  <label for="obf-name-random">
+                  <label for="obf-name-random" title="Random project hash (scrubs original filename completely)">
                     <i class="fa-solid fa-shuffle"></i> Random Hash
                   </label>
 
                   <input type="radio" id="obf-name-suffix" name="obf-naming-strategy" value="suffix">
-                  <label for="obf-name-suffix">
-                    <i class="fa-solid fa-font"></i> Keep Name (+ _obfuscated)
+                  <label for="obf-name-suffix" title="Keep original name and append _obfuscated">
+                    <i class="fa-solid fa-font"></i> Keep Name
                   </label>
 
                   <input type="radio" id="obf-name-custom" name="obf-naming-strategy" value="custom">
