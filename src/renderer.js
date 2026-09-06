@@ -368,8 +368,6 @@ if (!window.api) {
     openFolder: () => {},
     openFile: () => {},
     getFilePathForDroppedFile: () => '',
-    selectMediaFile: async () => null,
-    probeMediaFile: async () => null,
     obfuscateLocalFile: async () => { throw new Error('Native local obfuscation requires Desktop Electron.'); },
     onObfuscateProgress: (cb) => { window.api._notifyObfProgress = cb; }
   };
@@ -951,6 +949,7 @@ const obfFileInput = document.getElementById('obf-file-input');
 const obfErrorMessage = document.getElementById('obf-error-message');
 
 const obfDetailsPanel = document.getElementById('obf-details-panel');
+const obfFileIconBox = document.getElementById('obf-file-icon-box');
 const obfFilename = document.getElementById('obf-filename');
 const obfFormatBadge = document.getElementById('obf-format-badge');
 const obfFilesize = document.getElementById('obf-filesize');
@@ -1235,7 +1234,7 @@ if (obfChangeFileBtn) {
     if (obfDetailsPanel) obfDetailsPanel.classList.add('hidden');
     if (obfProgressPanel) obfProgressPanel.classList.add('hidden');
     if (obfCompletePanel) obfCompletePanel.classList.add('hidden');
-    if (obfDropZone) obfDropZone.focus();
+    if (obfDropZone) obfDropZone.click();
   });
 }
 
