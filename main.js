@@ -4,6 +4,7 @@ const fs = require('fs');
 const axios = require('axios');
 const { spawn, exec } = require('child_process');
 const ffmpeg = require('ffmpeg-static');
+const { probeMediaInfo, processMediaObfuscation, SUPPORTED_EXTENSIONS } = require('./media-obfuscator');
 
 // Determine paths
 const userDataPath = app.getPath('userData');
@@ -457,3 +458,58 @@ ipcMain.handle('save-metadata-file', async (event, { content, filename, defaultP
   }
   return null;
 });
+
+// Local Media Obfuscator IPC Handlers
+ipcMain.handle('select-media-file', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select Media File to Obfuscate',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Supported Media', extensions: ['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'mp3'] },
+      { name: 'Video Files', extensions: ['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi'] },
+      { name: 'Audio Files', extensions: ['mp3'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+
+  if (!result.canceled && result.filePaths && result.filePaths.length > 0) {
+    const selected = result.filePaths[0];
+    const info = await probeMediaInfo(ffmpegPath, selected);
+    return { filePath: selected, ...info };
+  }
+  return null;
+});
+
+ipcMain.handle('probe-media-file', async (event, filePath) => {
+  if (!filePath || typeof filePath !== 'string') return null;
+  const clean = path.resolve(filePath.replace(/^["']|["']$/g, '').trim());
+  if (!fs.existsSync(clean) || !fs.statSync(clean).isFile()) return null;
+  const info = await probeMediaInfo(ffmpegPath, clean);
+  return { filePath: clean, ...info };
+});
+
+ipcMain.handle('obfuscate-local-file', async (event, { filePath, targetDir, options }) => {
+  if (!filePath || typeof filePath !== 'string') {
+    throw new Error('No input file provided.');
+  }
+  const cleanPath = path.resolve(filePath.replace(/^["']|["']$/g, '').trim());
+  if (!fs.existsSync(cleanPath) || !fs.statSync(cleanPath).isFile()) {
+    throw new Error('Input file does not exist or is not a regular file.');
+  }
+
+  const destFolder = targetDir && typeof targetDir === 'string'
+    ? path.resolve(targetDir)
+    : path.dirname(cleanPath);
+
+  const result = await processMediaObfuscation(
+    ffmpegPath,
+    cleanPath,
+    destFolder,
+    options || {},
+    (progress) => {
+      safeSend('obfuscate-progress', progress);
+    }
+  );
+
+  return result;
+});

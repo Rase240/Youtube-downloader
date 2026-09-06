@@ -366,7 +366,12 @@ if (!window.api) {
     onDownloadComplete: (cb) => { window.api._notifyComplete = cb; },
     onDownloadError: (cb) => { window.api._notifyError = cb; },
     openFolder: () => {},
-    openFile: () => {}
+    openFile: () => {},
+    getFilePathForDroppedFile: () => '',
+    selectMediaFile: async () => null,
+    probeMediaFile: async () => null,
+    obfuscateLocalFile: async () => { throw new Error('Native local obfuscation requires Desktop Electron.'); },
+    onObfuscateProgress: (cb) => { window.api._notifyObfProgress = cb; }
   };
 }
 
@@ -504,47 +509,54 @@ if (pasteBtn) {
   });
 }
 
-// Mobile Bottom Nav Tab Listeners & View Switcher
+// ==========================================================================
+// Navigation View Switcher (Desktop Tabs & Mobile Bottom Nav)
+// ==========================================================================
+const tabDownloaderBtn = document.getElementById('tab-downloader-btn');
+const tabObfuscatorBtn = document.getElementById('tab-obfuscator-btn');
+const tabHistoryBtn = document.getElementById('tab-history-btn');
+
 const navDownloaderBtn = document.getElementById('nav-downloader-btn');
+const navObfuscatorBtn = document.getElementById('nav-obfuscator-btn');
 const navHistoryBtn = document.getElementById('nav-history-btn');
-const historyPanel = document.getElementById('history-panel');
-const searchCard = document.querySelector('.search-card');
 
-function setMobileTab(tab) {
-  const isMobile = window.innerWidth <= 600;
-  if (!isMobile) return;
+const downloaderView = document.getElementById('downloader-view');
+const obfuscatorView = document.getElementById('obfuscator-view');
+const historyView = document.getElementById('history-view');
 
-  if (tab === 'history') {
-    if (searchCard) searchCard.style.display = 'none';
-    if (detailsPanel) detailsPanel.style.display = 'none';
-    if (progressPanel) progressPanel.style.display = 'none';
-    if (completePanel) completePanel.style.display = 'none';
-    if (historyPanel) {
-      historyPanel.style.display = 'block';
-      historyPanel.classList.remove('hidden');
-    }
-  } else {
-    if (searchCard) searchCard.style.display = '';
-    if (detailsPanel && !detailsPanel.classList.contains('hidden')) detailsPanel.style.display = '';
-    if (progressPanel && !progressPanel.classList.contains('hidden')) progressPanel.style.display = '';
-    if (completePanel && !completePanel.classList.contains('hidden')) completePanel.style.display = '';
-    if (historyPanel) historyPanel.style.display = '';
+function switchAppView(view) {
+  // Update desktop tabs
+  if (tabDownloaderBtn) {
+    tabDownloaderBtn.classList.toggle('active', view === 'downloader');
+    tabDownloaderBtn.setAttribute('aria-selected', String(view === 'downloader'));
   }
+  if (tabObfuscatorBtn) {
+    tabObfuscatorBtn.classList.toggle('active', view === 'obfuscator');
+    tabObfuscatorBtn.setAttribute('aria-selected', String(view === 'obfuscator'));
+  }
+  if (tabHistoryBtn) {
+    tabHistoryBtn.classList.toggle('active', view === 'history');
+    tabHistoryBtn.setAttribute('aria-selected', String(view === 'history'));
+  }
+
+  // Update mobile nav items
+  if (navDownloaderBtn) navDownloaderBtn.classList.toggle('active', view === 'downloader');
+  if (navObfuscatorBtn) navObfuscatorBtn.classList.toggle('active', view === 'obfuscator');
+  if (navHistoryBtn) navHistoryBtn.classList.toggle('active', view === 'history');
+
+  // Toggle views cleanly
+  if (downloaderView) downloaderView.classList.toggle('hidden', view !== 'downloader');
+  if (obfuscatorView) obfuscatorView.classList.toggle('hidden', view !== 'obfuscator');
+  if (historyView) historyView.classList.toggle('hidden', view !== 'history');
 }
 
-if (navDownloaderBtn && navHistoryBtn) {
-  navDownloaderBtn.addEventListener('click', () => {
-    navDownloaderBtn.classList.add('active');
-    navHistoryBtn.classList.remove('active');
-    setMobileTab('downloader');
-  });
+if (tabDownloaderBtn) tabDownloaderBtn.addEventListener('click', () => switchAppView('downloader'));
+if (tabObfuscatorBtn) tabObfuscatorBtn.addEventListener('click', () => switchAppView('obfuscator'));
+if (tabHistoryBtn) tabHistoryBtn.addEventListener('click', () => switchAppView('history'));
 
-  navHistoryBtn.addEventListener('click', () => {
-    navHistoryBtn.classList.add('active');
-    navDownloaderBtn.classList.remove('active');
-    setMobileTab('history');
-  });
-}
+if (navDownloaderBtn) navDownloaderBtn.addEventListener('click', () => switchAppView('downloader'));
+if (navObfuscatorBtn) navObfuscatorBtn.addEventListener('click', () => switchAppView('obfuscator'));
+if (navHistoryBtn) navHistoryBtn.addEventListener('click', () => switchAppView('history'));
 
 // Select Directory Location
 browseBtn.addEventListener('click', async () => {
@@ -753,6 +765,7 @@ window.api.onDownloadComplete(({ filepath }) => {
       id: Date.now().toString(),
       title: currentVideoData.title || 'Downloaded Media',
       type: typeVideo.checked ? 'video' : 'audio',
+      category: 'download',
       filepath: filepath || savePathInput.value,
       timestamp: new Date().toISOString()
     };
@@ -818,7 +831,24 @@ resetBtn.addEventListener('click', () => {
   videoUrlInput.focus();
 });
 
-// Local Download History Rendering
+// Helper: Format bytes to human readable string
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// Local Download & Obfuscation History Rendering
 function renderHistory() {
   historyList.innerHTML = '';
   
@@ -836,22 +866,43 @@ function renderHistory() {
     li.className = 'history-item';
 
     const isVideo = item.type === 'video';
-    const iconClass = isVideo ? 'fa-solid fa-video icon-video' : 'fa-solid fa-music icon-audio';
-    const iconContainerClass = isVideo ? 'history-item-icon icon-video' : 'history-item-icon icon-audio';
+    const iconClass = isVideo ? 'fa-solid fa-video' : 'fa-solid fa-music';
+    const isObfuscated = item.category === 'obfuscated';
+    const badgeHtml = isObfuscated
+      ? `<span class="history-badge history-badge-obfuscated">Obfuscated</span>`
+      : `<span class="history-badge history-badge-download">Downloaded</span>`;
+
+    let dateStr = '';
+    if (item.timestamp) {
+      try {
+        const d = new Date(item.timestamp);
+        dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ', ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      } catch (e) { }
+    }
+
+    const ext = (item.title && item.title.includes('.')) ? item.title.split('.').pop().toUpperCase() : (isVideo ? 'MP4' : 'MP3');
+    const detailsLine = [
+      ext,
+      item.size || null,
+      dateStr || null
+    ].filter(Boolean).join(' · ');
 
     li.innerHTML = `
       <div class="history-item-details">
-        <div class="${iconContainerClass}">
+        <div class="history-item-icon">
           <i class="${iconClass}"></i>
         </div>
         <div class="history-item-meta">
-          <div class="history-item-title truncate" title="${item.title}">${item.title}</div>
-          <div class="history-item-path truncate" title="${item.filepath}">${item.filepath}</div>
+          <div class="history-item-title truncate" title="${escapeHtml(item.title)}">
+            <span>${escapeHtml(item.title)}</span>
+            ${badgeHtml}
+          </div>
+          <div class="history-item-path truncate">${escapeHtml(detailsLine)}</div>
         </div>
       </div>
       <div class="history-item-actions">
-        <button class="history-item-btn btn-open" title="Open Folder">
-          <i class="fa-solid fa-folder-open"></i>
+        <button class="history-item-btn btn-open" title="${item.downloadUrl ? 'Download File' : 'Open Folder'}">
+          <i class="${item.downloadUrl ? 'fa-solid fa-download' : 'fa-solid fa-folder-open'}"></i>
         </button>
         <button class="history-item-btn btn-delete" title="Remove History">
           <i class="fa-solid fa-trash"></i>
@@ -860,7 +911,19 @@ function renderHistory() {
     `;
 
     li.querySelector('.btn-open').addEventListener('click', () => {
-      window.api.openFile(item.filepath);
+      if (item.downloadUrl) {
+        const host = getApiHost();
+        const token = getStoredAuthToken();
+        const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+        const a = document.createElement('a');
+        a.href = `${host}${item.downloadUrl}${tokenParam}`;
+        a.download = item.title || 'media_file';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } else {
+        window.api.openFile(item.filepath);
+      }
     });
 
     li.querySelector('.btn-delete').addEventListener('click', () => {
@@ -880,7 +943,537 @@ clearHistoryBtn.addEventListener('click', () => {
   renderHistory();
 });
 
+// ==========================================================================
+// Local Media Obfuscator Controller
+// ==========================================================================
+const obfDropZone = document.getElementById('obf-drop-zone');
+const obfFileInput = document.getElementById('obf-file-input');
+const obfErrorMessage = document.getElementById('obf-error-message');
+
+const obfDetailsPanel = document.getElementById('obf-details-panel');
+const obfFilename = document.getElementById('obf-filename');
+const obfFormatBadge = document.getElementById('obf-format-badge');
+const obfFilesize = document.getElementById('obf-filesize');
+const obfDuration = document.getElementById('obf-duration');
+const obfResolution = document.getElementById('obf-resolution');
+const obfCodecs = document.getElementById('obf-codecs');
+const obfChangeFileBtn = document.getElementById('obf-change-file-btn');
+const obfRemoveFileBtn = document.getElementById('obf-remove-file-btn');
+
+const obfForm = document.getElementById('obf-form');
+const obfSignatureSelect = document.getElementById('obf-signature-select');
+const obfCustomName = document.getElementById('obf-custom-name');
+const obfCustomNameWrapper = document.getElementById('obf-custom-name-wrapper');
+const obfSavePath = document.getElementById('obf-save-path');
+const obfBrowseDirBtn = document.getElementById('obf-browse-dir-btn');
+const obfDirGroup = document.getElementById('obf-dir-group');
+const obfStartBtn = document.getElementById('obf-start-btn');
+
+const obfProgressPanel = document.getElementById('obf-progress-panel');
+const obfProgressStage = document.getElementById('obf-progress-stage');
+const obfProgressSubtext = document.getElementById('obf-progress-subtext');
+const stepPrepare = document.getElementById('step-prepare');
+const stepStrip = document.getElementById('step-strip');
+const stepSpoof = document.getElementById('step-spoof');
+const stepValidate = document.getElementById('step-validate');
+
+const obfCompletePanel = document.getElementById('obf-complete-panel');
+const obfCompleteMessage = document.getElementById('obf-complete-message');
+const obfResultFilename = document.getElementById('obf-result-filename');
+const obfResultPath = document.getElementById('obf-result-path');
+const obfResultPathRow = document.getElementById('obf-result-path-row');
+const obfOpenFileBtn = document.getElementById('obf-open-file-btn');
+const obfDownloadBtn = document.getElementById('obf-download-btn');
+const obfCopyPathBtn = document.getElementById('obf-copy-path-btn');
+const obfResetBtn = document.getElementById('obf-reset-btn');
+
+// Obfuscator State
+let currentObfFile = null;
+let currentObfResult = null;
+
+// Hide desktop directory picker on Web/Mobile platforms
+const isDesktopApp = Boolean(window.api && typeof window.api.selectMediaFile === 'function');
+if (!isDesktopApp && obfDirGroup) {
+  obfDirGroup.classList.add('hidden');
+}
+
+// Staged Progress Indicator Helper
+function setObfStage(activeId) {
+  const steps = [stepPrepare, stepStrip, stepSpoof, stepValidate];
+  let foundActive = false;
+  steps.forEach(step => {
+    if (!step) return;
+    if (step.id === activeId) {
+      step.className = 'stage-step active';
+      foundActive = true;
+    } else if (!foundActive) {
+      step.className = 'stage-step completed';
+    } else {
+      step.className = 'stage-step';
+    }
+  });
+}
+
+// Media Selection & Inspection Handler
+function handleSelectedMediaFile(info) {
+  if (!info) return;
+  currentObfFile = info;
+
+  if (obfErrorMessage) obfErrorMessage.classList.add('hidden');
+
+  if (obfFilename) {
+    obfFilename.textContent = info.name || info.filename || 'media_file';
+    obfFilename.title = info.name || info.filename || '';
+  }
+
+  const ext = (info.ext || '').toUpperCase().replace('.', '') || 'MP4';
+  if (obfFormatBadge) obfFormatBadge.textContent = ext;
+
+  if (obfFilesize) {
+    obfFilesize.innerHTML = `<i class="fa-solid fa-hard-drive"></i> ${info.sizeFormatted || '-- MB'}`;
+  }
+
+  if (obfDuration) {
+    if (info.durationText) {
+      obfDuration.innerHTML = `<i class="fa-solid fa-clock"></i> ${info.durationText}`;
+      obfDuration.classList.remove('hidden');
+    } else {
+      obfDuration.classList.add('hidden');
+    }
+  }
+
+  if (obfResolution) {
+    if (info.resolutionText) {
+      obfResolution.innerHTML = `<i class="fa-solid fa-expand"></i> ${info.resolutionText}`;
+      obfResolution.classList.remove('hidden');
+    } else {
+      obfResolution.classList.add('hidden');
+    }
+  }
+
+  if (obfCodecs) {
+    if (info.codecText) {
+      obfCodecs.innerHTML = `<i class="fa-solid fa-film"></i> ${info.codecText}`;
+      obfCodecs.classList.remove('hidden');
+    } else {
+      obfCodecs.classList.add('hidden');
+    }
+  }
+
+  if (obfFileIconBox) {
+    obfFileIconBox.innerHTML = info.isVideo === false 
+      ? '<i class="fa-solid fa-file-audio"></i>' 
+      : '<i class="fa-solid fa-file-video"></i>';
+  }
+
+  // Set default save directory if in Electron
+  if (obfSavePath && info.filePath) {
+    const parentDir = info.filePath.substring(0, Math.max(info.filePath.lastIndexOf('\\'), info.filePath.lastIndexOf('/')));
+    obfSavePath.value = parentDir || '';
+  }
+
+  if (obfDetailsPanel) {
+    obfDetailsPanel.classList.remove('hidden');
+    obfDetailsPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+}
+
+// Setup Drag & Drop Handlers
+if (obfDropZone) {
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+    obfDropZone.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+  });
+
+  ['dragenter', 'dragover'].forEach(eventName => {
+    obfDropZone.addEventListener(eventName, (e) => {
+      let isSupported = true;
+      if (e.dataTransfer && e.dataTransfer.items) {
+        for (const item of e.dataTransfer.items) {
+          if (item.kind === 'file') {
+            const type = (item.type || '').toLowerCase();
+            if (type && !type.startsWith('video/') && !type.startsWith('audio/')) {
+              isSupported = false;
+            }
+          }
+        }
+      }
+      if (isSupported) {
+        obfDropZone.classList.add('dragover');
+        obfDropZone.classList.remove('dragover-invalid');
+      } else {
+        obfDropZone.classList.add('dragover-invalid');
+        obfDropZone.classList.remove('dragover');
+      }
+    });
+  });
+
+  ['dragleave', 'drop'].forEach(eventName => {
+    obfDropZone.addEventListener(eventName, () => {
+      obfDropZone.classList.remove('dragover');
+      obfDropZone.classList.remove('dragover-invalid');
+    });
+  });
+
+  obfDropZone.addEventListener('drop', async (e) => {
+    const files = e.dataTransfer ? e.dataTransfer.files : null;
+    if (!files || files.length === 0) return;
+    const file = files[0];
+
+    // Electron desktop path extraction using preload webUtils
+    if (window.api && typeof window.api.getFilePathForDroppedFile === 'function') {
+      const nativePath = window.api.getFilePathForDroppedFile(file);
+      if (nativePath) {
+        const probed = await window.api.probeMediaFile(nativePath);
+        handleSelectedMediaFile({
+          filePath: nativePath,
+          name: file.name,
+          ...probed
+        });
+        return;
+      }
+    }
+
+    // Web / Mobile fallback
+    handleSelectedMediaFile({
+      fileObj: file,
+      name: file.name,
+      ext: '.' + (file.name.split('.').pop() || 'mp4'),
+      sizeFormatted: formatBytes(file.size),
+      isVideo: !file.type.startsWith('audio')
+    });
+  });
+
+  // Click on dropzone triggers native picker or HTML file input
+  obfDropZone.addEventListener('click', async () => {
+    if (window.api && typeof window.api.selectMediaFile === 'function') {
+      const res = await window.api.selectMediaFile();
+      if (res) {
+        handleSelectedMediaFile({
+          filePath: res.filePath,
+          name: res.filename,
+          ...res
+        });
+        return;
+      }
+    }
+
+    if (obfFileInput) obfFileInput.click();
+  });
+
+  // Keyboard accessibility: Space / Enter
+  obfDropZone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      obfDropZone.click();
+    }
+  });
+}
+
+// Fallback HTML File Input
+if (obfFileInput) {
+  obfFileInput.addEventListener('change', () => {
+    if (!obfFileInput.files || obfFileInput.files.length === 0) return;
+    const file = obfFileInput.files[0];
+    handleSelectedMediaFile({
+      fileObj: file,
+      name: file.name,
+      ext: '.' + (file.name.split('.').pop() || 'mp4'),
+      sizeFormatted: formatBytes(file.size),
+      isVideo: !file.type.startsWith('audio')
+    });
+  });
+}
+
+// Change & Remove File Buttons on Selected File Card
+if (obfChangeFileBtn) {
+  obfChangeFileBtn.addEventListener('click', () => {
+    if (obfDropZone) obfDropZone.click();
+  });
+}
+
+if (obfRemoveFileBtn) {
+  obfRemoveFileBtn.addEventListener('click', () => {
+    currentObfFile = null;
+    if (obfDetailsPanel) obfDetailsPanel.classList.add('hidden');
+    if (obfErrorMessage) obfErrorMessage.classList.add('hidden');
+    if (obfFileInput) obfFileInput.value = '';
+    if (obfDropZone) obfDropZone.focus();
+  });
+}
+
+// Naming strategy radio toggle listener
+document.querySelectorAll('input[name="obf-naming-strategy"]').forEach(radio => {
+  radio.addEventListener('change', () => {
+    if (obfCustomNameWrapper) {
+      if (radio.value === 'custom' && radio.checked) {
+        obfCustomNameWrapper.classList.remove('hidden');
+        if (obfCustomName) obfCustomName.focus();
+      } else {
+        obfCustomNameWrapper.classList.add('hidden');
+      }
+    }
+  });
+});
+
+// Destination browse button (Desktop)
+if (obfBrowseDirBtn) {
+  obfBrowseDirBtn.addEventListener('click', async () => {
+    if (window.api && typeof window.api.selectDirectory === 'function') {
+      const selected = await window.api.selectDirectory();
+      if (selected && obfSavePath) obfSavePath.value = selected;
+    }
+  });
+}
+
+// Change file button
+if (obfChangeFileBtn) {
+  obfChangeFileBtn.addEventListener('click', () => {
+    currentObfFile = null;
+    if (obfDetailsPanel) obfDetailsPanel.classList.add('hidden');
+    if (obfProgressPanel) obfProgressPanel.classList.add('hidden');
+    if (obfCompletePanel) obfCompletePanel.classList.add('hidden');
+    if (obfDropZone) obfDropZone.focus();
+  });
+}
+
+// Obfuscate Form Submission
+if (obfForm) {
+  obfForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!currentObfFile) return;
+
+    const signatureKey = obfSignatureSelect ? obfSignatureSelect.value : 'adobe-premiere';
+    const timestampModeRadio = document.querySelector('input[name="obf-timestamp-mode"]:checked');
+    const timestampMode = timestampModeRadio ? timestampModeRadio.value : 'random-past';
+    const namingRadio = document.querySelector('input[name="obf-naming-strategy"]:checked');
+    const namingStrategy = namingRadio ? namingRadio.value : 'random';
+    const customName = obfCustomName ? obfCustomName.value.trim() : '';
+    const targetDir = obfSavePath ? obfSavePath.value.trim() : '';
+
+    const options = {
+      signatureKey,
+      timestampMode,
+      namingStrategy,
+      customName
+    };
+
+    // Show Progress State
+    if (obfDetailsPanel) obfDetailsPanel.classList.add('hidden');
+    if (obfCompletePanel) obfCompletePanel.classList.add('hidden');
+    if (obfErrorMessage) obfErrorMessage.classList.add('hidden');
+    if (obfProgressPanel) obfProgressPanel.classList.remove('hidden');
+
+    setObfStage('step-prepare');
+    if (obfProgressStage) obfProgressStage.textContent = 'Preparing file...';
+    if (obfProgressSubtext) obfProgressSubtext.textContent = 'Analyzing container headers and stream parameters...';
+
+    // Desktop Native FFmpeg Execution
+    if (currentObfFile.filePath && window.api && typeof window.api.obfuscateLocalFile === 'function') {
+      try {
+        if (window.api.onObfuscateProgress) {
+          window.api.onObfuscateProgress((prog) => {
+            if (prog.stage === 'preparing') {
+              setObfStage('step-prepare');
+              if (obfProgressStage) obfProgressStage.textContent = 'Analyzing container...';
+            } else if (prog.stage === 'processing') {
+              setObfStage('step-strip');
+              if (obfProgressStage) obfProgressStage.textContent = 'Stripping metadata & injecting signatures...';
+              setTimeout(() => setObfStage('step-spoof'), 300);
+            } else if (prog.stage === 'validating') {
+              setObfStage('step-validate');
+              if (obfProgressStage) obfProgressStage.textContent = 'Validating clean media output...';
+            }
+            if (obfProgressSubtext && prog.message) obfProgressSubtext.textContent = prog.message;
+          });
+        }
+
+        const result = await window.api.obfuscateLocalFile({
+          filePath: currentObfFile.filePath,
+          targetDir: targetDir || undefined,
+          options
+        });
+
+        currentObfResult = result;
+        showObfComplete(result);
+      } catch (err) {
+        showObfError(err.message || 'Obfuscation process failed.');
+      }
+      return;
+    }
+
+    // Web / Mobile Streaming Upload Execution
+    if (currentObfFile.fileObj) {
+      try {
+        const host = getApiHost();
+        const token = getStoredAuthToken();
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${host}/api/obfuscate-upload`);
+
+        if (token) xhr.setRequestHeader('x-access-token', token);
+        xhr.setRequestHeader('x-filename', encodeURIComponent(currentObfFile.fileObj.name));
+        xhr.setRequestHeader('x-signature', signatureKey);
+        xhr.setRequestHeader('x-timestamp-mode', timestampMode);
+        xhr.setRequestHeader('x-naming-strategy', namingStrategy);
+        if (customName) xhr.setRequestHeader('x-custom-name', encodeURIComponent(customName));
+
+        xhr.upload.onprogress = (evt) => {
+          if (evt.lengthComputable) {
+            const pct = Math.round((evt.loaded / evt.total) * 100);
+            if (obfProgressStage) obfProgressStage.textContent = `Uploading media (${pct}%)...`;
+            if (obfProgressSubtext) obfProgressSubtext.textContent = `${formatBytes(evt.loaded)} / ${formatBytes(evt.total)}`;
+            if (pct >= 100) {
+              setObfStage('step-strip');
+              if (obfProgressStage) obfProgressStage.textContent = 'Server processing metadata...';
+              setTimeout(() => setObfStage('step-spoof'), 600);
+            }
+          }
+        };
+
+        xhr.onload = () => {
+          if (xhr.status === 200) {
+            try {
+              const res = JSON.parse(xhr.responseText);
+              if (res.success) {
+                setObfStage('step-validate');
+                currentObfResult = res;
+                showObfComplete(res, host);
+              } else {
+                showObfError(res.error || 'Server reported an error during obfuscation.');
+              }
+            } catch (e) {
+              showObfError('Invalid response from server.');
+            }
+          } else {
+            try {
+              const errRes = JSON.parse(xhr.responseText);
+              showObfError(errRes.error || `Server error (${xhr.status})`);
+            } catch (e) {
+              showObfError(`Server error (${xhr.status})`);
+            }
+          }
+        };
+
+        xhr.onerror = () => {
+          showObfError('Network error connecting to the obfuscation server.');
+        };
+
+        xhr.send(currentObfFile.fileObj);
+      } catch (err) {
+        showObfError(err.message || 'Failed to upload media file.');
+      }
+    }
+  });
+}
+
+function showObfError(msg) {
+  if (obfProgressPanel) obfProgressPanel.classList.add('hidden');
+  if (obfDetailsPanel) obfDetailsPanel.classList.remove('hidden');
+  if (obfErrorMessage) {
+    obfErrorMessage.innerHTML = `
+      <i class="fa-solid fa-circle-exclamation"></i>
+      <span>${escapeHtml(msg || 'The media container could not be read or processed.')}</span>
+    `;
+    obfErrorMessage.classList.remove('hidden');
+  }
+}
+
+function showObfComplete(result, hostUrl = '') {
+  if (obfProgressPanel) obfProgressPanel.classList.add('hidden');
+  if (obfCompletePanel) obfCompletePanel.classList.remove('hidden');
+
+  if (obfResultFilename) obfResultFilename.textContent = result.filename || 'obfuscated_media.mp4';
+  if (obfResultPath) {
+    if (result.outputPath) {
+      obfResultPath.textContent = result.outputPath;
+      if (obfResultPathRow) obfResultPathRow.classList.remove('hidden');
+    } else {
+      if (obfResultPathRow) obfResultPathRow.classList.add('hidden');
+    }
+  }
+
+  // Handle Desktop "Show in Folder" vs Web "Download Clean File"
+  const isDesktop = Boolean(result.outputPath && window.api && typeof window.api.openFile === 'function');
+  if (obfOpenFileBtn) {
+    if (isDesktop) {
+      obfOpenFileBtn.classList.remove('hidden');
+      obfOpenFileBtn.onclick = () => window.api.openFile(result.outputPath);
+    } else {
+      obfOpenFileBtn.classList.add('hidden');
+    }
+  }
+
+  if (obfDownloadBtn) {
+    if (result.downloadUrl) {
+      obfDownloadBtn.classList.remove('hidden');
+      const token = getStoredAuthToken();
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+      const fullUrl = `${hostUrl || getApiHost()}${result.downloadUrl}${tokenParam}`;
+      obfDownloadBtn.onclick = () => {
+        const a = document.createElement('a');
+        a.href = fullUrl;
+        a.download = result.filename || 'obfuscated_media.mp4';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      };
+      // Auto-trigger download on mobile/web
+      setTimeout(() => obfDownloadBtn.click(), 600);
+    } else {
+      obfDownloadBtn.classList.add('hidden');
+    }
+  }
+
+  if (obfCopyPathBtn) {
+    obfCopyPathBtn.onclick = async () => {
+      const pathToCopy = result.outputPath || result.filename;
+      try {
+        await navigator.clipboard.writeText(pathToCopy);
+        obfCopyPathBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
+        setTimeout(() => {
+          obfCopyPathBtn.innerHTML = '<i class="fa-solid fa-copy"></i> Copy File Path';
+        }, 2000);
+      } catch (e) { }
+    };
+  }
+
+  // Record in Unified Activity History
+  const historyItem = {
+    id: Date.now().toString(),
+    title: result.filename,
+    sourceName: currentObfFile ? currentObfFile.name : 'Local File',
+    type: currentObfFile && currentObfFile.isVideo === false ? 'audio' : 'video',
+    category: 'obfuscated',
+    filepath: result.outputPath || result.filename,
+    downloadUrl: result.downloadUrl || null,
+    size: result.sizeFormatted || (currentObfFile ? currentObfFile.sizeFormatted : '--'),
+    timestamp: new Date().toISOString()
+  };
+
+  downloadHistory.unshift(historyItem);
+  if (downloadHistory.length > 25) downloadHistory.pop();
+  try {
+    localStorage.setItem('download_history', JSON.stringify(downloadHistory));
+  } catch (e) { }
+  renderHistory();
+}
+
+if (obfResetBtn) {
+  obfResetBtn.addEventListener('click', () => {
+    currentObfFile = null;
+    currentObfResult = null;
+    if (obfCompletePanel) obfCompletePanel.classList.add('hidden');
+    if (obfProgressPanel) obfProgressPanel.classList.add('hidden');
+    if (obfDetailsPanel) obfDetailsPanel.classList.add('hidden');
+    if (obfErrorMessage) obfErrorMessage.classList.add('hidden');
+    if (obfDropZone) obfDropZone.focus();
+  });
+}
+
 // Notify Electron main process (desktop only) that frontend is ready
 if (window.api && typeof window.api.appLoaded === 'function') {
   try { window.api.appLoaded(); } catch(e) { console.warn('appLoaded error:', e); }
 }
+
