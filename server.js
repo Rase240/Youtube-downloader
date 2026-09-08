@@ -86,7 +86,23 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000);
 
-app.use(cors());
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, server-to-server)
+    if (!origin) return callback(null, true);
+    const allowed = [
+      /^https?:\/\/localhost(:\d+)?$/,
+      /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
+      /^https?:\/\/10\.0\.2\.2(:\d+)?$/,
+      /^https:\/\/raserar\.duckdns\.org$/,
+      /^capacitor:\/\/localhost$/
+    ];
+    if (allowed.some(pattern => pattern.test(origin))) {
+      return callback(null, true);
+    }
+    return callback(null, false);
+  }
+}));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'src')));
 
@@ -152,6 +168,23 @@ setInterval(() => {
     console.warn('[Cleaner] Error during auto-cleanup:', e.message);
   }
 }, 15 * 60 * 1000);
+
+// URL Validation: Prevent yt-dlp flag injection & restrict to HTTP(S) URLs
+function isValidMediaUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (trimmed.startsWith('-')) return false; // Block flag injection (e.g. --exec)
+  try {
+    const parsed = new URL(trimmed);
+    return ['http:', 'https:'].includes(parsed.protocol);
+  } catch (e) {
+    return false;
+  }
+}
+
+// Download concurrency limiter
+const MAX_CONCURRENT_DOWNLOADS = 3;
+let activeDownloads = 0;
 
 // Authentication Middleware
 function checkAuth(req, res, next) {
@@ -253,7 +286,10 @@ app.post('/api/auth/verify', (req, res) => {
   }
 
   const { password } = req.body || {};
-  if (password && password === APP_PASSWORD) {
+  // Constant-time comparison to prevent timing attacks
+  if (password && typeof password === 'string' &&
+      password.length === APP_PASSWORD.length &&
+      crypto.timingSafeEqual(Buffer.from(password), Buffer.from(APP_PASSWORD))) {
     clearFailedAttempts(clientIp);
     const sessionToken = generateSessionToken();
     activeSessions.set(sessionToken, { createdAt: Date.now() });
@@ -269,6 +305,9 @@ app.get('/api/info', checkAuth, (req, res) => {
   const videoUrl = req.query.url;
   if (!videoUrl) {
     return res.status(400).json({ error: 'URL parameter is required' });
+  }
+  if (!isValidMediaUrl(videoUrl)) {
+    return res.status(400).json({ error: 'Invalid URL. Only http:// and https:// URLs are allowed.' });
   }
 
   const cookiesPath = path.join(__dirname, 'cookies.txt');
@@ -330,6 +369,16 @@ app.post('/api/download', checkAuth, (req, res) => {
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
   }
+  if (!isValidMediaUrl(url)) {
+    return res.status(400).json({ error: 'Invalid URL. Only http:// and https:// URLs are allowed.' });
+  }
+
+  // Enforce concurrent download limit
+  if (activeDownloads >= MAX_CONCURRENT_DOWNLOADS) {
+    return res.status(429).json({ error: 'Server is busy processing other downloads. Please try again shortly.' });
+  }
+  activeDownloads++;
+  const releaseDownloadSlot = () => { activeDownloads = Math.max(0, activeDownloads - 1); };
 
   const cookiesPath = path.join(__dirname, 'cookies.txt');
   const binToUse = fs.existsSync(ytdlpPath) ? ytdlpPath : 'yt-dlp';
@@ -404,11 +453,12 @@ app.post('/api/download', checkAuth, (req, res) => {
   child.on('error', (err) => {
     if (responded) return;
     responded = true;
+    releaseDownloadSlot();
     res.status(500).json({ error: `Failed to start yt-dlp: ${err.message}` });
   });
 
   child.on('close', async (code) => {
-    if (responded) return;
+    if (responded) { releaseDownloadSlot(); return; }
 
     if (code === 0) {
       let cleanPath = (filepath || '').replace(/^["']|["']$/g, '').trim();
@@ -426,6 +476,7 @@ app.post('/api/download', checkAuth, (req, res) => {
       }
 
       responded = true;
+      releaseDownloadSlot();
       const filename = path.basename(cleanPath);
       res.json({
         success: true,
@@ -434,6 +485,7 @@ app.post('/api/download', checkAuth, (req, res) => {
       });
     } else {
       responded = true;
+      releaseDownloadSlot();
       console.error(`[Download Error] yt-dlp failed (code ${code}):`, stderr);
       res.status(500).json({ error: stderr.trim() || 'Download failed' });
     }
