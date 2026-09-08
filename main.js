@@ -338,9 +338,12 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
     // Robust format fallback string to prevent "Requested format not available" errors
     let finalFormatId = `${requestedFormat}/${requestedFormat.replace('[ext=m4a]', '')}/bestvideo+bestaudio/best`;
 
+    const SAFE_CONTAINERS = new Set(['mp4', 'mkv', 'webm']);
+    const safeContainer = SAFE_CONTAINERS.has(containerFormat) ? containerFormat : 'mp4';
+
     args.push(
       '-f', finalFormatId,
-      '--merge-output-format', containerFormat || 'mp4',
+      '--merge-output-format', safeContainer,
       '--restrict-filenames',
       '--no-warnings',
       '--ffmpeg-location', ffmpegPath

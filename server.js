@@ -22,6 +22,7 @@ if (fs.existsSync(envFile)) {
 }
 
 const app = express();
+app.set('trust proxy', 1); // Trust first reverse proxy hop (Nginx / DuckDNS) for accurate client IP
 const PORT = process.env.PORT || 3000;
 // Default to 'download123' if not set in environment. Set APP_PASSWORD="" to disable auth.
 const APP_PASSWORD = process.env.APP_PASSWORD !== undefined ? process.env.APP_PASSWORD : 'download123';
@@ -76,12 +77,18 @@ function clearFailedAttempts(ip) {
   loginAttempts.delete(ip);
 }
 
-// Cleanup expired sessions every hour
+// Cleanup expired sessions and stale rate limit records every hour
 setInterval(() => {
   const now = Date.now();
   for (const [token, session] of activeSessions) {
     if (now - session.createdAt > SESSION_MAX_AGE) {
       activeSessions.delete(token);
+    }
+  }
+  for (const [ip, record] of loginAttempts) {
+    record.timestamps = record.timestamps.filter(t => now - t < ATTEMPT_WINDOW);
+    if (record.timestamps.length === 0) {
+      loginAttempts.delete(ip);
     }
   }
 }, 60 * 60 * 1000);
@@ -103,6 +110,15 @@ app.use(cors({
     return callback(null, false);
   }
 }));
+
+// HTTP Security Headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'src')));
 
@@ -421,9 +437,12 @@ app.post('/api/download', checkAuth, (req, res) => {
       finalFormatId = 'bv*+ba / b';
     }
 
+    const SAFE_CONTAINERS = new Set(['mp4', 'mkv', 'webm']);
+    const safeContainer = SAFE_CONTAINERS.has(containerFormat) ? containerFormat : 'mp4';
+
     args.push(
       '-f', finalFormatId,
-      '--merge-output-format', containerFormat || 'mp4'
+      '--merge-output-format', safeContainer
     );
   }
 
@@ -690,7 +709,6 @@ app.listen(PORT, () => {
   console.log(`🚀 YT Downloader Pro Server running on http://localhost:${PORT}`);
   if (APP_PASSWORD && APP_PASSWORD.trim().length > 0) {
     console.log(`🔒 Password Protection: ENABLED`);
-    console.log(`🔑 Current Access Password: "${APP_PASSWORD}"`);
   } else {
     console.log(`⚠️ Password Protection: DISABLED (Anyone can access)`);
   }
