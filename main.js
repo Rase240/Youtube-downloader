@@ -185,10 +185,28 @@ ipcMain.handle('select-directory', async () => {
   }
 });
 
+// URL Validation: Prevent yt-dlp flag injection & restrict to HTTP(S) URLs
+function isValidMediaUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (trimmed.startsWith('-')) return false; // Block flag injection (e.g. --exec)
+  try {
+    const parsed = new URL(trimmed);
+    return ['http:', 'https:'].includes(parsed.protocol);
+  } catch (e) {
+    return false;
+  }
+}
+
 ipcMain.handle('fetch-info', async (event, url) => {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(ytdlpPath)) {
       reject(new Error('yt-dlp is not installed yet. Please wait for setup to finish.'));
+      return;
+    }
+
+    if (!isValidMediaUrl(url)) {
+      reject(new Error('Invalid URL. Only http:// and https:// URLs are allowed.'));
       return;
     }
 
@@ -290,6 +308,11 @@ function obfuscateVideoMetadata(inputPath) {
 ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, outputFolder, obfuscate }) => {
   if (!fs.existsSync(ytdlpPath)) {
     event.reply('download-error', 'yt-dlp is not installed yet. Please wait for setup to finish.');
+    return;
+  }
+
+  if (!isValidMediaUrl(url)) {
+    event.reply('download-error', 'Invalid URL. Only http:// and https:// URLs are allowed.');
     return;
   }
 
