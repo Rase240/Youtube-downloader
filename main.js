@@ -4,7 +4,12 @@ const fs = require('fs');
 const axios = require('axios');
 const { spawn, exec } = require('child_process');
 const ffmpeg = require('ffmpeg-static');
-const { probeMediaInfo, processMediaObfuscation, SUPPORTED_EXTENSIONS } = require('./media-obfuscator');
+const {
+  probeMediaInfo,
+  processMediaObfuscation,
+  ensureAppleMediaCompatibility,
+  SUPPORTED_EXTENSIONS
+} = require('./media-obfuscator');
 
 // Determine paths
 const userDataPath = app.getPath('userData');
@@ -17,10 +22,23 @@ const ytdlpUrl = isWin
   ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
   : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
 
-// Resolve ffmpeg path (packaged vs dev)
+// Resolve ffmpeg path (packaged vs dev, static or system binary)
 let ffmpegPath = ffmpeg;
-if (app.isPackaged) {
+if (app.isPackaged && typeof ffmpeg === 'string') {
   ffmpegPath = ffmpeg.replace('app.asar', 'app.asar.unpacked');
+}
+if (!ffmpegPath || !fs.existsSync(ffmpegPath)) {
+  if (fs.existsSync('/usr/bin/ffmpeg')) ffmpegPath = '/usr/bin/ffmpeg';
+  else if (fs.existsSync('/usr/local/bin/ffmpeg')) ffmpegPath = '/usr/local/bin/ffmpeg';
+  else ffmpegPath = 'ffmpeg';
+}
+
+function getCookiesPath() {
+  const projectCookies = path.join(__dirname, 'cookies.txt');
+  if (fs.existsSync(projectCookies)) return projectCookies;
+  const userCookies = path.join(userDataPath, 'cookies.txt');
+  if (fs.existsSync(userCookies)) return userCookies;
+  return null;
 }
 
 let mainWindow = null;
@@ -210,8 +228,24 @@ ipcMain.handle('fetch-info', async (event, url) => {
       return;
     }
 
-    // Run yt-dlp -j to dump metadata
-    const child = spawn(ytdlpPath, ['-j', url]);
+    const cookiesPath = getCookiesPath();
+    const hasCookies = Boolean(cookiesPath && fs.existsSync(cookiesPath));
+
+    const infoArgs = [
+      '-j',
+      '--no-warnings',
+      '--js-runtimes', 'deno,node'
+    ];
+
+    if (hasCookies) {
+      infoArgs.push('--cookies', cookiesPath);
+    } else {
+      infoArgs.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
+    }
+
+    infoArgs.push(url);
+
+    const child = spawn(ytdlpPath, infoArgs);
     let stdoutData = '';
     let stderrData = '';
     let settled = false;
@@ -235,7 +269,9 @@ ipcMain.handle('fetch-info', async (event, url) => {
       settled = true;
       if (code === 0) {
         try {
-          const info = JSON.parse(stdoutData);
+          const lines = stdoutData.trim().split(/\r?\n/).filter(Boolean);
+          const lastLine = lines[lines.length - 1];
+          const info = JSON.parse(lastLine || stdoutData);
           resolve(info);
         } catch (e) {
           reject(new Error('Failed to parse video info.'));
@@ -250,60 +286,6 @@ ipcMain.handle('fetch-info', async (event, url) => {
     });
   });
 });
-
-// FFmpeg Metadata Obfuscation & Spoofing (Injects fake metadata: title, creation date, software encoder, and random filename)
-function obfuscateVideoMetadata(inputPath) {
-  return new Promise((resolve) => {
-    let cleanInput = (inputPath || '').replace(/^["']|["']$/g, '').trim();
-    if (!fs.existsSync(cleanInput)) {
-      console.error('obfuscateVideoMetadata target file not found:', cleanInput);
-      return resolve(cleanInput);
-    }
-
-    const ext = path.extname(cleanInput) || '.mp4';
-    const dir = path.dirname(cleanInput);
-    const randomId = Math.floor(10000 + Math.random() * 90000);
-    const randomStr = Math.random().toString(36).substring(2, 10);
-    const outputPath = path.join(dir, `project_${randomId}${ext}`);
-
-    const randomMinutes = Math.floor(15 + Math.random() * 4300);
-    const pastDate = new Date(Date.now() - randomMinutes * 60 * 1000).toISOString();
-
-    const args = [
-      '-y',
-      '-i', cleanInput,
-      '-c', 'copy',
-      '-map_metadata', '-1',
-      '-metadata', `title=Export_${randomId}`,
-      '-metadata', `comment=Rendered_with_${randomStr}`,
-      '-metadata', `creation_time=${pastDate}`,
-      '-metadata', `encoder=Adobe Premiere Pro CC 2024`
-    ];
-
-    if (ext === '.mp3') {
-      args.push('-id3v2_version', '3');
-    }
-
-    args.push(outputPath);
-
-    console.log('[FFmpeg Obfuscate] Command:', ffmpegPath, args.join(' '));
-    const child = spawn(ffmpegPath, args);
-    child.on('close', (code) => {
-      if (code === 0 && fs.existsSync(outputPath)) {
-        try { fs.unlinkSync(cleanInput); } catch (e) { }
-        console.log('[FFmpeg Obfuscate] Successfully created obfuscated video:', outputPath);
-        resolve(outputPath);
-      } else {
-        console.error('[FFmpeg Obfuscate] Failed with exit code:', code);
-        resolve(cleanInput);
-      }
-    });
-    child.on('error', (err) => {
-      console.error('[FFmpeg Obfuscate] Process error:', err);
-      resolve(cleanInput);
-    });
-  });
-}
 
 ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, outputFolder, obfuscate }) => {
   if (!fs.existsSync(ytdlpPath)) {
@@ -321,33 +303,57 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
     return;
   }
 
-  const args = [];
+  const cookiesPath = getCookiesPath();
+  const hasCookies = Boolean(cookiesPath && fs.existsSync(cookiesPath));
+
+  const args = [
+    '--no-warnings',
+    '--restrict-filenames',
+    '--js-runtimes', 'deno,node',
+    '--ffmpeg-location', ffmpegPath
+  ];
+
+  if (hasCookies) {
+    args.push('--cookies', cookiesPath);
+  } else {
+    args.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
+  }
 
   if (type === 'audio') {
     args.push(
-      '-f', 'bestaudio/best',
+      '-f', 'ba/b',
       '-x',
       '--audio-format', 'mp3',
-      '--audio-quality', '0',
-      '--restrict-filenames',
-      '--no-warnings',
-      '--ffmpeg-location', ffmpegPath
+      '--audio-quality', '0'
     );
   } else {
-    let requestedFormat = formatId || 'bestvideo+bestaudio/best';
-    // Robust format fallback string to prevent "Requested format not available" errors
-    let finalFormatId = `${requestedFormat}/${requestedFormat.replace('[ext=m4a]', '')}/bestvideo+bestaudio/best`;
-
     const SAFE_CONTAINERS = new Set(['mp4', 'mkv', 'webm']);
     const safeContainer = SAFE_CONTAINERS.has(containerFormat) ? containerFormat : 'mp4';
 
-    args.push(
-      '-f', finalFormatId,
-      '--merge-output-format', safeContainer,
-      '--restrict-filenames',
-      '--no-warnings',
-      '--ffmpeg-location', ffmpegPath
-    );
+    const heightMatch = (formatId || '').match(/height<=(\d+)/);
+    const maxH = heightMatch ? heightMatch[1] : null;
+
+    let finalFormatId;
+    if (maxH) {
+      finalFormatId = `bv*[height<=?${maxH}]+ba/b[height<=?${maxH}] / bv*[width<=?${maxH}]+ba/b[width<=?${maxH}] / bv*+ba / b`;
+    } else {
+      finalFormatId = 'bv*+ba / b';
+    }
+
+    args.push('-f', finalFormatId);
+
+    if (safeContainer === 'mp4') {
+      // Prioritize H.264 video and AAC audio for 100% native iOS / QuickTime compatibility across YouTube, Instagram, and TikTok
+      if (maxH) {
+        args.push('-S', `res:${maxH},vcodec:h264,lang,quality,fps,hdr:12,acodec:m4a`);
+      } else {
+        args.push('-S', 'vcodec:h264,lang,quality,res,fps,hdr:12,acodec:m4a');
+      }
+      args.push('--merge-output-format', 'mp4');
+      args.push('--postprocessor-args', 'ffmpeg:-movflags +faststart');
+    } else {
+      args.push('--merge-output-format', safeContainer);
+    }
   }
 
   // Define save path template
@@ -359,6 +365,7 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
   const child = spawn(ytdlpPath, args);
   currentDownloadProcess = child;
   let filepath = '';
+  let stderrData = '';
 
   child.stdout.on('data', (data) => {
     const text = data.toString();
@@ -393,13 +400,15 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
       }
     } else if (text.includes('[ExtractAudio]')) {
       event.reply('download-progress', { status: 'Converting audio to MP3...' });
-    } else if (text.includes('[ffmpeg]')) {
+    } else if (text.includes('[ffmpeg]') || text.includes('[Merger]')) {
       event.reply('download-progress', { status: 'Merging video & audio channels...' });
     }
   });
 
   child.stderr.on('data', (data) => {
-    console.error('[yt-dlp stderr]:', data.toString());
+    const text = data.toString();
+    stderrData += text;
+    console.error('[yt-dlp stderr]:', text);
   });
 
   child.on('error', (err) => {
@@ -409,8 +418,6 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
   });
 
   child.on('close', async (code) => {
-    // Guard against a stale process (e.g. a previous download) clobbering
-    // the reference for a newer one.
     if (currentDownloadProcess === child) {
       currentDownloadProcess = null;
     }
@@ -418,7 +425,6 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
     if (code === 0) {
       let cleanPath = (filepath || '').replace(/^["']|["']$/g, '').trim();
 
-      // Fallback: If cleanPath doesn't exist or is empty, find newest file in outputFolder
       if (!cleanPath || !fs.existsSync(cleanPath)) {
         try {
           const files = fs.readdirSync(outputFolder)
@@ -434,31 +440,76 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
         }
       }
 
-      console.log('Target cleanPath for obfuscation:', cleanPath, 'obfuscate flag:', obfuscate);
+      console.log('Target cleanPath for compatibility and obfuscation:', cleanPath, 'obfuscate flag:', obfuscate);
 
-      if (obfuscate && cleanPath && fs.existsSync(cleanPath)) {
-        event.reply('download-progress', { status: 'Randomizing metadata & project filename...' });
-        const obfuscatedPath = await obfuscateVideoMetadata(cleanPath);
-        event.reply('download-complete', { filepath: obfuscatedPath });
-      } else {
-        event.reply('download-complete', { filepath: cleanPath });
+      let finalPath = cleanPath;
+      if (cleanPath && fs.existsSync(cleanPath)) {
+        if (type !== 'audio' && (containerFormat === 'mp4' || !containerFormat)) {
+          event.reply('download-progress', { status: 'Optimizing for iOS / Apple compatibility...' });
+          finalPath = await ensureAppleMediaCompatibility(ffmpegPath, cleanPath);
+        }
+
+        if (obfuscate && finalPath && fs.existsSync(finalPath)) {
+          event.reply('download-progress', { status: 'Randomizing metadata & project filename...' });
+          try {
+            const obfResult = await processMediaObfuscation(
+              ffmpegPath,
+              finalPath,
+              outputFolder,
+              { signatureKey: 'adobe-premiere', timestampMode: 'random-past' }
+            );
+            if (obfResult && obfResult.outputPath) {
+              if (obfResult.outputPath !== finalPath) {
+                try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath); } catch (e) {}
+              }
+              finalPath = obfResult.outputPath;
+            }
+          } catch (obfErr) {
+            console.warn('[Obfuscation Warning] Failed to obfuscate, using normalized file:', obfErr.message);
+          }
+        }
       }
+
+      event.reply('download-complete', { filepath: finalPath });
     } else {
-      event.reply('download-error', 'Download was interrupted or encountered an error.');
+      let errorSummary = (stderrData || '').trim();
+      if (errorSummary.includes('ERROR:')) {
+        errorSummary = errorSummary.substring(errorSummary.indexOf('ERROR:'));
+      }
+      const lines = errorSummary.split('\n').filter(Boolean);
+      const userError = lines.slice(-2).join(' ') || 'Download was interrupted or encountered an error.';
+      event.reply('download-error', userError);
     }
   });
 });
 
 ipcMain.on('cancel-download', () => {
   if (currentDownloadProcess) {
-    currentDownloadProcess.kill();
+    if (process.platform === 'win32' && currentDownloadProcess.pid) {
+      try {
+        exec(`taskkill /pid ${currentDownloadProcess.pid} /T /F`);
+      } catch (e) {
+        currentDownloadProcess.kill();
+      }
+    } else {
+      currentDownloadProcess.kill();
+    }
     currentDownloadProcess = null;
   }
 });
 
 ipcMain.on('open-folder', (event, folderPath) => {
   if (fs.existsSync(folderPath)) {
-    shell.openPath(folderPath);
+    try {
+      const stat = fs.statSync(folderPath);
+      if (stat.isDirectory()) {
+        shell.openPath(folderPath);
+      } else {
+        shell.showItemInFolder(folderPath);
+      }
+    } catch (e) {
+      shell.openPath(folderPath);
+    }
   }
 });
 
@@ -538,4 +589,4 @@ ipcMain.handle('obfuscate-local-file', async (event, { filePath, targetDir, opti
   );
 
   return result;
-});
+});
