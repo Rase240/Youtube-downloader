@@ -5,7 +5,12 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const ffmpeg = require('ffmpeg-static');
-const { probeMediaInfo, processMediaObfuscation, SUPPORTED_EXTENSIONS } = require('./media-obfuscator');
+const {
+  probeMediaInfo,
+  processMediaObfuscation,
+  ensureAppleMediaCompatibility,
+  SUPPORTED_EXTENSIONS
+} = require('./media-obfuscator');
 
 // Optional: Load environment variables from .env file if it exists
 const envFile = path.join(__dirname, '.env');
@@ -214,46 +219,6 @@ function checkAuth(req, res, next) {
   return res.status(401).json({ error: 'Unauthorized: Invalid or expired session' });
 }
 
-// FFmpeg Metadata Obfuscation & Spoofing (Injects fake metadata: title, creation date, software encoder, and random filename)
-function obfuscateVideoMetadata(inputPath) {
-  return new Promise((resolve) => {
-    let cleanInput = (inputPath || '').replace(/^["']|["']$/g, '').trim();
-    if (!fs.existsSync(cleanInput)) {
-      return resolve(cleanInput);
-    }
-
-    const ext = path.extname(cleanInput) || '.mp4';
-    const randomId = Math.floor(10000 + Math.random() * 90000);
-    const randomStr = Math.random().toString(36).substring(2, 10);
-    const outputPath = path.join(downloadsDir, `project_${randomId}${ext}`);
-
-    const randomMinutes = Math.floor(15 + Math.random() * 4300);
-    const pastDate = new Date(Date.now() - randomMinutes * 60 * 1000).toISOString();
-
-    const args = [
-      '-y',
-      '-i', cleanInput,
-      '-c', 'copy',
-      '-map_metadata', '-1',
-      '-metadata', `title=Export_${randomId}`,
-      '-metadata', `comment=Rendered_with_${randomStr}`,
-      '-metadata', `creation_time=${pastDate}`,
-      '-metadata', `encoder=Adobe Premiere Pro CC 2024`,
-      outputPath
-    ];
-
-    const child = spawn(ffmpegBin, args);
-    child.on('close', (code) => {
-      if (code === 0 && fs.existsSync(outputPath)) {
-        try { fs.unlinkSync(cleanInput); } catch (e) { }
-        resolve(outputPath);
-      } else {
-        resolve(cleanInput);
-      }
-    });
-    child.on('error', () => resolve(cleanInput));
-  });
-}
 
 // Health Check
 app.get('/api/health', (req, res) => {
@@ -440,10 +405,20 @@ app.post('/api/download', checkAuth, (req, res) => {
     const SAFE_CONTAINERS = new Set(['mp4', 'mkv', 'webm']);
     const safeContainer = SAFE_CONTAINERS.has(containerFormat) ? containerFormat : 'mp4';
 
-    args.push(
-      '-f', finalFormatId,
-      '--merge-output-format', safeContainer
-    );
+    args.push('-f', finalFormatId);
+
+    if (safeContainer === 'mp4') {
+      // Prioritize H.264 video and AAC audio for 100% native iOS / QuickTime compatibility across YouTube, Instagram, and TikTok
+      if (maxH) {
+        args.push('-S', `res:${maxH},vcodec:h264,lang,quality,fps,hdr:12,acodec:m4a`);
+      } else {
+        args.push('-S', 'vcodec:h264,lang,quality,res,fps,hdr:12,acodec:m4a');
+      }
+      args.push('--merge-output-format', 'mp4');
+      args.push('--postprocessor-args', 'ffmpeg:-movflags +faststart');
+    } else {
+      args.push('--merge-output-format', safeContainer);
+    }
   }
 
   const outputTemplate = path.join(downloadsDir, 'temp_download_%(id)s.%(ext)s');
@@ -490,13 +465,35 @@ app.post('/api/download', checkAuth, (req, res) => {
         if (files.length > 0) cleanPath = files[0];
       }
 
-      if (obfuscate && cleanPath && fs.existsSync(cleanPath)) {
-        cleanPath = await obfuscateVideoMetadata(cleanPath);
+      let finalPath = cleanPath;
+      if (cleanPath && fs.existsSync(cleanPath)) {
+        if (type !== 'audio' && (containerFormat === 'mp4' || !containerFormat)) {
+          finalPath = await ensureAppleMediaCompatibility(ffmpegBin, cleanPath);
+        }
+
+        if (obfuscate && finalPath && fs.existsSync(finalPath)) {
+          try {
+            const obfResult = await processMediaObfuscation(
+              ffmpegBin,
+              finalPath,
+              downloadsDir,
+              { signatureKey: 'adobe-premiere', timestampMode: 'random-past' }
+            );
+            if (obfResult && obfResult.outputPath) {
+              if (obfResult.outputPath !== finalPath) {
+                try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath); } catch (e) {}
+              }
+              finalPath = obfResult.outputPath;
+            }
+          } catch (obfErr) {
+            console.warn('[Server Obfuscate Warning]:', obfErr.message);
+          }
+        }
       }
 
       responded = true;
       releaseDownloadSlot();
-      const filename = path.basename(cleanPath);
+      const filename = path.basename(finalPath);
       res.json({
         success: true,
         filename,
@@ -527,6 +524,7 @@ app.get('/api/file/:filename', checkAuth, (req, res) => {
   }
 
   if (fs.existsSync(resolved)) {
+    res.setHeader('Accept-Ranges', 'bytes');
     res.download(resolved);
   } else {
     res.status(404).json({ error: 'File not found' });

@@ -19,7 +19,8 @@ const {
   resolveUniqueDestination,
   validateOutputFile,
   probeMediaInfo,
-  processMediaObfuscation
+  processMediaObfuscation,
+  ensureAppleMediaCompatibility
 } = require('../media-obfuscator');
 
 const FFMPEG_BIN = path.join(__dirname, '..', 'node_modules', 'ffmpeg-static', 'ffmpeg.exe');
@@ -401,4 +402,65 @@ describe('Local Media Obfuscator - Comprehensive Suite', () => {
       assert.strictEqual(dlRes.status, 200, 'Clean file downloaded successfully');
     });
   });
+
+  describe('5. Apple iOS Media Compatibility Suite', () => {
+    test('Ensures MP4 file has faststart moov atom at the front', async () => {
+      const sampleMp4 = path.join(TEST_WORKSPACE, 'ios_faststart_test.mp4');
+      generateSyntheticMedia(sampleMp4, '.mp4');
+
+      const result = await ensureAppleMediaCompatibility(FFMPEG_BIN, sampleMp4);
+      assert.strictEqual(fs.existsSync(result), true);
+
+      // Verify moov atom occurs before mdat atom for iOS streaming
+      const buffer = fs.readFileSync(result);
+      const moovIndex = buffer.indexOf(Buffer.from('moov'));
+      const mdatIndex = buffer.indexOf(Buffer.from('mdat'));
+      assert.ok(moovIndex > -1, 'File must contain moov atom');
+      assert.ok(mdatIndex > -1, 'File must contain mdat atom');
+      assert.ok(moovIndex < mdatIndex, 'moov atom must precede mdat atom for faststart iOS playback');
+    });
+
+    test('Transcodes Opus/Vorbis audio inside MP4 to AAC for iOS QuickTime compatibility', async () => {
+      // Generate a synthetic MP4 with vorbis audio
+      const opusMp4 = path.join(TEST_WORKSPACE, 'ios_opus_test.mp4');
+      spawnSync(FFMPEG_BIN, [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=1:size=160x120:rate=10',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
+        '-c:v', 'libx264',
+        '-c:a', 'libvorbis',
+        opusMp4
+      ]);
+
+      const initialInfo = await probeMediaInfo(FFMPEG_BIN, opusMp4);
+      assert.strictEqual(initialInfo.audioCodec.includes('vorbis'), true, 'Input has vorbis/non-aac audio');
+
+      const fixedPath = await ensureAppleMediaCompatibility(FFMPEG_BIN, opusMp4);
+      const fixedInfo = await probeMediaInfo(FFMPEG_BIN, fixedPath);
+      assert.strictEqual(fixedInfo.audioCodec, 'aac', 'Audio must be converted to AAC for iOS');
+      assert.strictEqual(fixedInfo.videoCodec, 'h264', 'Video remains H.264');
+    });
+
+    test('Transcodes VP9/AV1 video inside MP4 to H.264 yuv420p for Apple Photos compatibility', async () => {
+      // Generate an MP4 with VP9 video
+      const vp9Mp4 = path.join(TEST_WORKSPACE, 'ios_vp9_test.mp4');
+      spawnSync(FFMPEG_BIN, [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=1:size=160x120:rate=10',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
+        '-c:v', 'libvpx-vp9',
+        '-c:a', 'aac',
+        vp9Mp4
+      ]);
+
+      const initialInfo = await probeMediaInfo(FFMPEG_BIN, vp9Mp4);
+      assert.ok(initialInfo.videoCodec.includes('vp9'), 'Input has VP9 video');
+
+      const fixedPath = await ensureAppleMediaCompatibility(FFMPEG_BIN, vp9Mp4);
+      const fixedInfo = await probeMediaInfo(FFMPEG_BIN, fixedPath);
+      assert.strictEqual(fixedInfo.videoCodec, 'h264', 'Video must be converted to H.264 for iOS compatibility');
+      assert.strictEqual(fixedInfo.audioCodec, 'aac', 'Audio remains AAC');
+    });
+  });
 });
+

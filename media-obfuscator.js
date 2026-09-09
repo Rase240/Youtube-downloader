@@ -184,11 +184,14 @@ function buildFfmpegArgs(inputPath, stagingOutputPath, options = {}) {
  */
 function moveFileSafely(src, dest) {
   try {
+    if (fs.existsSync(dest) && path.resolve(src) !== path.resolve(dest)) {
+      try { fs.unlinkSync(dest); } catch (e) { }
+    }
     fs.renameSync(src, dest);
   } catch (err) {
-    if (err.code === 'EXDEV' || err.code === 'EPERM' || err.code === 'EACCES') {
+    if (err.code === 'EXDEV' || err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EEXIST') {
       fs.copyFileSync(src, dest);
-      fs.unlinkSync(src);
+      try { fs.unlinkSync(src); } catch (e) { }
     } else {
       throw err;
     }
@@ -228,7 +231,9 @@ function probeMediaInfo(ffmpegBin, filePath) {
       isAudio: true,
       durationText: '',
       resolutionText: '',
-      codecText: ''
+      codecText: '',
+      videoCodec: '',
+      audioCodec: ''
     };
 
     const child = spawn(ffmpegBin, ['-hide_banner', '-i', filePath]);
@@ -249,8 +254,11 @@ function probeMediaInfo(ffmpegBin, filePath) {
         result.resolutionText = resMatch[1];
       }
 
-      const videoCodecMatch = stderr.match(/Video:\s*([a-zA-Z0-9_-]+)/);
-      const audioCodecMatch = stderr.match(/Audio:\s*([a-zA-Z0-9_-]+)/);
+      const videoCodecMatch = stderr.match(/Video:\s*([a-zA-Z0-9_-]+)/i);
+      const audioCodecMatch = stderr.match(/Audio:\s*([a-zA-Z0-9_-]+)/i);
+      result.videoCodec = videoCodecMatch ? videoCodecMatch[1].toLowerCase() : '';
+      result.audioCodec = audioCodecMatch ? audioCodecMatch[1].toLowerCase() : '';
+
       const parts = [];
       if (videoCodecMatch) parts.push(videoCodecMatch[1].toUpperCase());
       if (audioCodecMatch) parts.push(audioCodecMatch[1].toUpperCase());
@@ -262,6 +270,102 @@ function probeMediaInfo(ffmpegBin, filePath) {
     child.on('error', () => {
       resolve(result);
     });
+  });
+}
+
+/**
+ * Ensures media files (MP4/MOV/M4V) are fully compliant with Apple iOS
+ * (iPhone, iPad, Safari, QuickTime, and Photos app) across YouTube, Instagram, and TikTok.
+ *
+ * Checks video and audio codecs:
+ * - Audio: Must be AAC (or MP3/ALAC). If Opus, Vorbis, etc., transcode audio to AAC.
+ * - Video: Must be H.264 (AVC) or H.265 (HEVC) with yuv420p. If VP9, AV1, etc., transcode to H.264.
+ * - Container: Always applies -movflags +faststart to place the moov atom at the start of the file.
+ */
+function ensureAppleMediaCompatibility(ffmpegBin, inputPath) {
+  return new Promise(async (resolve) => {
+    let cleanInput = (inputPath || '').replace(/^["']|["']$/g, '').trim();
+    if (!fs.existsSync(cleanInput)) {
+      return resolve(cleanInput);
+    }
+
+    const ext = path.extname(cleanInput).toLowerCase();
+    // Only MP4, M4V, MOV containers require Apple AVFoundation container normalization
+    if (ext !== '.mp4' && ext !== '.m4v' && ext !== '.mov') {
+      return resolve(cleanInput);
+    }
+
+    try {
+      const info = await probeMediaInfo(ffmpegBin, cleanInput);
+      const videoCodec = (info.videoCodec || '').toLowerCase();
+      const audioCodec = (info.audioCodec || '').toLowerCase();
+
+      const isAppleAudioCompatible = ['aac', 'mp4a', 'mp3', 'alac'].includes(audioCodec);
+      const isAppleVideoCompatible = ['h264', 'avc1', 'hevc', 'hvc1', 'hev1'].includes(videoCodec);
+
+      // Determine ffmpeg arguments
+      const args = [
+        '-y',
+        '-i', cleanInput,
+        '-map', '0'
+      ];
+
+      let needsVideoTranscode = !isAppleVideoCompatible && videoCodec.length > 0;
+      let needsAudioTranscode = !isAppleAudioCompatible && audioCodec.length > 0;
+
+      if (needsVideoTranscode) {
+        // Transcode VP9/AV1 to high quality H.264 with yuv420p standard chroma
+        args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '19', '-pix_fmt', 'yuv420p');
+      } else {
+        args.push('-c:v', 'copy');
+      }
+
+      if (needsAudioTranscode) {
+        // Transcode Opus/Vorbis to high quality AAC 192k
+        args.push('-c:a', 'aac', '-b:a', '192k');
+      } else {
+        args.push('-c:a', 'copy');
+      }
+
+      // Preserve subtitles and other metadata streams
+      args.push('-c:s', 'copy', '-c:d', 'copy');
+      // Critical for iOS streaming: place moov atom at the front
+      args.push('-movflags', '+faststart');
+
+      const stagingDir = path.dirname(cleanInput);
+      const randomHex = crypto.randomBytes(4).toString('hex');
+      const stagingPath = path.join(stagingDir, `.compat_staging_${randomHex}${ext}`);
+      args.push(stagingPath);
+
+      const child = spawn(ffmpegBin, args);
+      let stderr = '';
+      child.stderr.on('data', (d) => { stderr += d.toString(); });
+
+      child.on('close', (code) => {
+        if (code === 0 && validateOutputFile(stagingPath)) {
+          try {
+            moveFileSafely(stagingPath, cleanInput);
+            resolve(cleanInput);
+          } catch (mvErr) {
+            try { if (fs.existsSync(stagingPath)) fs.unlinkSync(stagingPath); } catch (e) { }
+            resolve(cleanInput);
+          }
+        } else {
+          try { if (fs.existsSync(stagingPath)) fs.unlinkSync(stagingPath); } catch (e) { }
+          console.warn('[Apple Compatibility] Transcoding fallback, keeping original:', stderr.slice(-300));
+          resolve(cleanInput);
+        }
+      });
+
+      child.on('error', (err) => {
+        console.warn('[Apple Compatibility] Process error:', err.message);
+        try { if (fs.existsSync(stagingPath)) fs.unlinkSync(stagingPath); } catch (e) { }
+        resolve(cleanInput);
+      });
+    } catch (err) {
+      console.warn('[Apple Compatibility] Probe error:', err.message);
+      resolve(cleanInput);
+    }
   });
 }
 
@@ -367,6 +471,7 @@ module.exports = {
   validateOutputFile,
   probeMediaInfo,
   processMediaObfuscation,
+  ensureAppleMediaCompatibility,
   formatFileSize,
   generateOutputFilename
 };
