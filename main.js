@@ -234,13 +234,13 @@ ipcMain.handle('fetch-info', async (event, url) => {
     const infoArgs = [
       '-j',
       '--no-warnings',
+      '--socket-timeout', '20',
+      '--extractor-retries', '2',
       '--js-runtimes', 'deno,node'
     ];
 
     if (hasCookies) {
       infoArgs.push('--cookies', cookiesPath);
-    } else {
-      infoArgs.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
     }
 
     infoArgs.push(url);
@@ -309,14 +309,19 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
   const args = [
     '--no-warnings',
     '--restrict-filenames',
+    '--throttled-rate', '100K',
+    '--socket-timeout', '30',
+    '--retries', '3',
+    '--fragment-retries', '3',
+    '--extractor-retries', '3',
     '--js-runtimes', 'deno,node',
+    '--buffer-size', '64K',
+    '--http-chunk-size', '10M',
     '--ffmpeg-location', ffmpegPath
   ];
 
   if (hasCookies) {
     args.push('--cookies', cookiesPath);
-  } else {
-    args.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
   }
 
   if (type === 'audio') {
@@ -335,9 +340,9 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
 
     let finalFormatId;
     if (maxH) {
-      finalFormatId = `bv*[height<=?${maxH}]+ba/b[height<=?${maxH}] / bv*[width<=?${maxH}]+ba/b[width<=?${maxH}] / bv*+ba / b`;
+      finalFormatId = `bv[height<=?${maxH}]+ba / bv*[height<=?${maxH}]+ba / bv[width<=?${maxH}]+ba / bv*[width<=?${maxH}]+ba / bv*+ba / b`;
     } else {
-      finalFormatId = 'bv*+ba / b';
+      finalFormatId = 'bv+ba / bv*+ba / b';
     }
 
     args.push('-f', finalFormatId);

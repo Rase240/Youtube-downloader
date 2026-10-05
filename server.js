@@ -298,13 +298,13 @@ app.get('/api/info', checkAuth, (req, res) => {
   const infoArgs = [
     '-j',
     '--no-warnings',
+    '--socket-timeout', '20',
+    '--extractor-retries', '2',
     '--js-runtimes', 'deno,node'
   ];
 
   if (hasCookies) {
     infoArgs.push('--cookies', cookiesPath);
-  } else {
-    infoArgs.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
   }
 
   infoArgs.push(videoUrl);
@@ -315,6 +315,14 @@ app.get('/api/info', checkAuth, (req, res) => {
   let stderr = '';
   let settled = false;
 
+  const infoTimer = setTimeout(() => {
+    if (!settled) {
+      settled = true;
+      try { child.kill('SIGKILL'); } catch (e) {}
+      res.status(504).json({ error: 'Video analysis timed out. Please check the URL and try again.' });
+    }
+  }, 25000);
+
   child.stdout.on('data', (d) => { stdout += d.toString(); });
   child.stderr.on('data', (d) => { 
     stderr += d.toString(); 
@@ -322,12 +330,14 @@ app.get('/api/info', checkAuth, (req, res) => {
   });
 
   child.on('error', (err) => {
+    clearTimeout(infoTimer);
     if (settled) return;
     settled = true;
     res.status(500).json({ error: `Failed to start yt-dlp: ${err.message}` });
   });
 
   child.on('close', (code) => {
+    clearTimeout(infoTimer);
     if (settled) return;
     settled = true;
     if (code === 0) {
@@ -344,9 +354,11 @@ app.get('/api/info', checkAuth, (req, res) => {
   });
 });
 
-// Download & Sanitize API (Protected)
+// Download & Sanitize API (Protected, Streaming Progress Enabled)
 app.post('/api/download', checkAuth, (req, res) => {
-  const { url, formatId, type, containerFormat, obfuscate = true } = req.body;
+  const { url, formatId, type, containerFormat, obfuscate = true, stream = false } = req.body || {};
+  const isStreamRequested = stream === true || req.headers.accept?.includes('text/event-stream');
+
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
   }
@@ -359,7 +371,47 @@ app.post('/api/download', checkAuth, (req, res) => {
     return res.status(429).json({ error: 'Server is busy processing other downloads. Please try again shortly.' });
   }
   activeDownloads++;
-  const releaseDownloadSlot = () => { activeDownloads = Math.max(0, activeDownloads - 1); };
+  let slotReleased = false;
+  const releaseDownloadSlot = () => {
+    if (!slotReleased) {
+      slotReleased = true;
+      activeDownloads = Math.max(0, activeDownloads - 1);
+    }
+  };
+
+  if (isStreamRequested) {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (res.flushHeaders) res.flushHeaders();
+  }
+
+  const sendEvent = (data) => {
+    if (isStreamRequested && !res.writableEnded) {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      if (typeof res.flush === 'function') res.flush();
+    }
+  };
+
+  sendEvent({
+    stage: 'starting',
+    status: 'Connecting to media servers & analyzing streams...',
+    percent: 5
+  });
+
+  let heartbeat = null;
+  if (isStreamRequested) {
+    heartbeat = setInterval(() => {
+      if (!res.writableEnded) {
+        res.write(': keepalive\n\n');
+        if (typeof res.flush === 'function') res.flush();
+      }
+    }, 10000);
+  }
+  const cleanupHeartbeat = () => {
+    if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+  };
 
   const cookiesPath = path.join(__dirname, 'cookies.txt');
   const binToUse = fs.existsSync(ytdlpPath) ? ytdlpPath : 'yt-dlp';
@@ -368,13 +420,18 @@ app.post('/api/download', checkAuth, (req, res) => {
   const args = [
     '--no-warnings',
     '--restrict-filenames',
-    '--js-runtimes', 'deno,node'
+    '--throttled-rate', '100K',
+    '--socket-timeout', '30',
+    '--retries', '3',
+    '--fragment-retries', '3',
+    '--extractor-retries', '3',
+    '--js-runtimes', 'deno,node',
+    '--buffer-size', '64K',
+    '--http-chunk-size', '10M'
   ];
 
   if (hasCookies) {
     args.push('--cookies', cookiesPath);
-  } else {
-    args.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
   }
 
   // Only supply --ffmpeg-location if an explicit binary file path exists
@@ -397,9 +454,9 @@ app.post('/api/download', checkAuth, (req, res) => {
     const maxH = heightMatch ? heightMatch[1] : null;
     let finalFormatId;
     if (maxH) {
-      finalFormatId = `bv*[height<=?${maxH}]+ba/b[height<=?${maxH}] / bv*[width<=?${maxH}]+ba/b[width<=?${maxH}] / bv*+ba / b`;
+      finalFormatId = `bv[height<=?${maxH}]+ba / bv*[height<=?${maxH}]+ba / bv[width<=?${maxH}]+ba / bv*[width<=?${maxH}]+ba / bv*+ba / b`;
     } else {
-      finalFormatId = 'bv*+ba / b';
+      finalFormatId = 'bv+ba / bv*+ba / b';
     }
 
     const SAFE_CONTAINERS = new Set(['mp4', 'mkv', 'webm']);
@@ -429,13 +486,89 @@ app.post('/api/download', checkAuth, (req, res) => {
   let stderr = '';
   let responded = false;
 
+  // Maximum 12-minute watchdog to prevent stuck processes from locking download slots
+  const downloadTimer = setTimeout(() => {
+    if (!responded) {
+      responded = true;
+      cleanupHeartbeat();
+      releaseDownloadSlot();
+      try {
+        if (process.platform === 'win32' && child.pid) {
+          exec(`taskkill /pid ${child.pid} /T /F`);
+        } else {
+          child.kill('SIGKILL');
+        }
+      } catch (e) {}
+      const errMsg = 'Download timed out after 12 minutes.';
+      if (isStreamRequested) {
+        sendEvent({ stage: 'error', error: errMsg });
+        res.end();
+      } else {
+        res.status(504).json({ error: errMsg });
+      }
+    }
+  }, 12 * 60 * 1000);
+
+  // Clean up if client disconnects before completion
+  res.on('close', () => {
+    if (!responded) {
+      responded = true;
+      cleanupHeartbeat();
+      clearTimeout(downloadTimer);
+      releaseDownloadSlot();
+      if (child && !child.killed) {
+        try {
+          if (process.platform === 'win32' && child.pid) {
+            exec(`taskkill /pid ${child.pid} /T /F`);
+          } else {
+            child.kill('SIGKILL');
+          }
+        } catch (e) {}
+      }
+    }
+  });
+
   child.stdout.on('data', (data) => {
     const text = data.toString();
     console.log(`[yt-dlp stdout] ${text.trim()}`);
     const destMatch = text.match(/Destination:\s*(.+)$/m);
+    const audioDestMatch = text.match(/\[ExtractAudio\] Destination:\s*(.+)$/m);
     const mergeMatch = text.match(/Merging formats into\s*["']?([^"'\r\n]+)["']?/);
     if (destMatch) filepath = destMatch[1].replace(/^["']|["']$/g, '').trim();
+    if (audioDestMatch) filepath = audioDestMatch[1].replace(/^["']|["']$/g, '').trim();
     if (mergeMatch) filepath = mergeMatch[1].replace(/^["']|["']$/g, '').trim();
+
+    if (text.includes('[download]')) {
+      const matchPercent = text.match(/(\d+(?:\.\d+)?)%/);
+      const matchSpeed = text.match(/at\s+([^\s]+)/);
+      const matchEta = text.match(/ETA\s+([^\s]+)/);
+      const matchSize = text.match(/of\s+([^\s]+)/);
+
+      if (matchPercent) {
+        const rawP = parseFloat(matchPercent[1]);
+        const scaled = Math.min(85, Math.round(10 + rawP * 0.75));
+        sendEvent({
+          stage: 'downloading',
+          status: `Downloading media (${matchPercent[1]}%)...`,
+          percent: scaled,
+          speed: matchSpeed ? matchSpeed[1] : '',
+          eta: matchEta ? matchEta[1] : '',
+          size: matchSize ? matchSize[1] : ''
+        });
+      }
+    } else if (text.includes('[ExtractAudio]')) {
+      sendEvent({
+        stage: 'converting',
+        status: 'Converting audio to MP3...',
+        percent: 86
+      });
+    } else if (text.includes('[ffmpeg]') || text.includes('[Merger]')) {
+      sendEvent({
+        stage: 'merging',
+        status: 'Merging video & audio streams...',
+        percent: 88
+      });
+    }
   });
 
   child.stderr.on('data', (data) => {
@@ -445,13 +578,22 @@ app.post('/api/download', checkAuth, (req, res) => {
   });
 
   child.on('error', (err) => {
+    clearTimeout(downloadTimer);
+    cleanupHeartbeat();
     if (responded) return;
     responded = true;
     releaseDownloadSlot();
-    res.status(500).json({ error: `Failed to start yt-dlp: ${err.message}` });
+    if (isStreamRequested) {
+      sendEvent({ stage: 'error', error: `Failed to start yt-dlp: ${err.message}` });
+      res.end();
+    } else {
+      res.status(500).json({ error: `Failed to start yt-dlp: ${err.message}` });
+    }
   });
 
   child.on('close', async (code) => {
+    clearTimeout(downloadTimer);
+    cleanupHeartbeat();
     if (responded) { releaseDownloadSlot(); return; }
 
     if (code === 0) {
@@ -468,10 +610,20 @@ app.post('/api/download', checkAuth, (req, res) => {
       let finalPath = cleanPath;
       if (cleanPath && fs.existsSync(cleanPath)) {
         if (type !== 'audio' && (containerFormat === 'mp4' || !containerFormat)) {
+          sendEvent({
+            stage: 'optimizing',
+            status: 'Optimizing for iOS / Apple compatibility...',
+            percent: 92
+          });
           finalPath = await ensureAppleMediaCompatibility(ffmpegBin, cleanPath);
         }
 
         if (obfuscate && finalPath && fs.existsSync(finalPath)) {
+          sendEvent({
+            stage: 'obfuscating',
+            status: 'Scrubbing metadata and signatures...',
+            percent: 96
+          });
           try {
             const obfResult = await processMediaObfuscation(
               ffmpegBin,
@@ -494,16 +646,36 @@ app.post('/api/download', checkAuth, (req, res) => {
       responded = true;
       releaseDownloadSlot();
       const filename = path.basename(finalPath);
-      res.json({
-        success: true,
-        filename,
-        downloadUrl: `/api/file/${encodeURIComponent(filename)}`
-      });
+      const downloadUrl = `/api/file/${encodeURIComponent(filename)}`;
+
+      if (isStreamRequested) {
+        sendEvent({
+          stage: 'complete',
+          status: 'Ready to save',
+          percent: 100,
+          success: true,
+          filename,
+          downloadUrl
+        });
+        res.end();
+      } else {
+        res.json({
+          success: true,
+          filename,
+          downloadUrl
+        });
+      }
     } else {
       responded = true;
       releaseDownloadSlot();
       console.error(`[Download Error] yt-dlp failed (code ${code}):`, stderr);
-      res.status(500).json({ error: stderr.trim() || 'Download failed' });
+      const errorMsg = stderr.trim() || 'Download failed';
+      if (isStreamRequested) {
+        sendEvent({ stage: 'error', error: errorMsg });
+        res.end();
+      } else {
+        res.status(500).json({ error: errorMsg });
+      }
     }
   });
 });

@@ -87,9 +87,24 @@ html {
 body {
   background-color: var(--bg-app);
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   justify-content: center;
   align-items: flex-start;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Touch & Mobile Ergonomics */
+button, .btn, .chip, .nav-tab, .tab-btn, .option-btn, .action-btn {
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.btn:active, .chip:active, .nav-tab:active, .tab-btn:active {
+  transform: scale(0.97);
+  transition: transform var(--transition-fast);
 }
 
 /* 3. Layout Structure */
@@ -98,13 +113,14 @@ body {
   max-width: 860px;
   margin: 0 auto;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
 }
 
 .app-content {
   flex: 1;
-  padding: var(--space-5) var(--space-4) var(--space-8);
+  padding: var(--space-5) var(--space-4) calc(var(--space-8) + env(safe-area-inset-bottom, 0px));
 }
 
 .view-panel {
@@ -122,11 +138,12 @@ body {
   position: sticky;
   top: 0;
   z-index: 50;
-  background-color: rgba(13, 17, 23, 0.92);
+  background-color: rgba(13, 17, 23, 0.94);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border-subtle);
-  height: 56px;
+  padding-top: env(safe-area-inset-top, 0px);
+  min-height: calc(56px + env(safe-area-inset-top, 0px));
   display: flex;
   align-items: center;
 }

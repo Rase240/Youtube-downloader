@@ -11,7 +11,7 @@ const { spawn } = require('child_process');
 
 // Formats supported for metadata container manipulation
 const SUPPORTED_EXTENSIONS = new Set([
-  '.mp4', '.m4v', '.mov', '.mkv', '.webm', '.avi', '.mp3'
+  '.mp4', '.m4v', '.mov', '.mkv', '.webm', '.avi', '.mp3', '.m4a'
 ]);
 
 // Software / Producer signatures
@@ -126,7 +126,7 @@ function buildFfmpegArgs(inputPath, stagingOutputPath, options = {}) {
   ];
 
   // Container-specific tailoring
-  if (ext === '.mp4' || ext === '.m4v' || ext === '.mov') {
+  if (ext === '.mp4' || ext === '.m4v' || ext === '.mov' || ext === '.m4a') {
     // Faststart moves moov atom to beginning for streamability without non-standard mdta atoms
     args.push('-movflags', '+faststart');
     args.push('-metadata', `title=${displayTitle}`);
@@ -273,6 +273,22 @@ function probeMediaInfo(ffmpegBin, filePath) {
   });
 }
 
+function checkHasFaststart(filePath) {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(131072);
+    const bytesRead = fs.readSync(fd, buf, 0, 131072, 0);
+    fs.closeSync(fd);
+    const slice = buf.subarray(0, bytesRead);
+    const moovIdx = slice.indexOf('moov');
+    const mdatIdx = slice.indexOf('mdat');
+    if (moovIdx !== -1 && (mdatIdx === -1 || moovIdx < mdatIdx)) {
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
 /**
  * Ensures media files (MP4/MOV/M4V) are fully compliant with Apple iOS
  * (iPhone, iPad, Safari, QuickTime, and Photos app) across YouTube, Instagram, and TikTok.
@@ -303,6 +319,14 @@ function ensureAppleMediaCompatibility(ffmpegBin, inputPath) {
       const isAppleAudioCompatible = ['aac', 'mp4a', 'mp3', 'alac'].includes(audioCodec);
       const isAppleVideoCompatible = ['h264', 'avc1', 'hevc', 'hvc1', 'hev1'].includes(videoCodec);
 
+      let needsVideoTranscode = !isAppleVideoCompatible && videoCodec.length > 0;
+      let needsAudioTranscode = !isAppleAudioCompatible && audioCodec.length > 0;
+
+      // If already compliant and faststart moov atom is in front, skip redundant FFmpeg pass entirely!
+      if (!needsVideoTranscode && !needsAudioTranscode && checkHasFaststart(cleanInput)) {
+        return resolve(cleanInput);
+      }
+
       // Determine ffmpeg arguments
       const args = [
         '-y',
@@ -310,12 +334,9 @@ function ensureAppleMediaCompatibility(ffmpegBin, inputPath) {
         '-map', '0'
       ];
 
-      let needsVideoTranscode = !isAppleVideoCompatible && videoCodec.length > 0;
-      let needsAudioTranscode = !isAppleAudioCompatible && audioCodec.length > 0;
-
       if (needsVideoTranscode) {
-        // Transcode VP9/AV1 to high quality H.264 with yuv420p standard chroma
-        args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '19', '-pix_fmt', 'yuv420p');
+        // Transcode VP9/AV1 to high quality H.264 with ultrafast preset and all threads for maximum speed
+        args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-threads', '0', '-pix_fmt', 'yuv420p');
       } else {
         args.push('-c:v', 'copy');
       }

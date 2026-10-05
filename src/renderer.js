@@ -221,9 +221,158 @@ function showAuthScreen() {
   }
 }
 
+// Native Device & Mobile Integration Helpers
+function triggerHaptic(duration = 20) {
+  if (window.AndroidDownloader && typeof window.AndroidDownloader.vibrate === 'function') {
+    try { window.AndroidDownloader.vibrate(duration); return; } catch (e) {}
+  }
+  if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+    try { navigator.vibrate(duration); } catch (e) {}
+  }
+}
+
+let _lastDeviceDownloadTime = 0;
+let _lastDeviceDownloadUrl = '';
+let _screenWakeLock = null;
+
+async function acquireScreenWakeLock() {
+  try {
+    if ('wakeLock' in navigator && !_screenWakeLock) {
+      _screenWakeLock = await navigator.wakeLock.request('screen');
+      _screenWakeLock.addEventListener('release', () => {
+        _screenWakeLock = null;
+      });
+    }
+  } catch (e) {}
+}
+
+function releaseScreenWakeLock() {
+  if (_screenWakeLock) {
+    try { _screenWakeLock.release(); } catch (e) {}
+    _screenWakeLock = null;
+  }
+}
+
+function triggerDeviceDownload(downloadUrl, filename, mimeType) {
+  if (!downloadUrl) return;
+
+  const now = Date.now();
+  if (_lastDeviceDownloadUrl === downloadUrl && (now - _lastDeviceDownloadTime < 4000)) {
+    console.log('[triggerDeviceDownload] Debounced duplicate trigger within 4s');
+    return;
+  }
+  _lastDeviceDownloadTime = now;
+  _lastDeviceDownloadUrl = downloadUrl;
+
+  // 1. Android Native Downloader Bridge (Synchronous & In-App)
+  if (window.AndroidDownloader && typeof window.AndroidDownloader.downloadFile === 'function') {
+    try {
+      window.AndroidDownloader.downloadFile(downloadUrl, filename || '', mimeType || '');
+      triggerHaptic(40);
+      return;
+    } catch (err) {
+      console.warn('[Android Native Bridge] Error starting download:', err);
+    }
+  }
+
+  // 2. Capacitor Plugin fallback if exposed
+  if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.AndroidNativeDownloader) {
+    try {
+      window.Capacitor.Plugins.AndroidNativeDownloader.download({
+        url: downloadUrl,
+        filename: filename || '',
+        mimeType: mimeType || ''
+      });
+      triggerHaptic(40);
+      return;
+    } catch (err) {
+      console.warn('[Capacitor Plugin] Error starting download:', err);
+    }
+  }
+
+  // 3. Desktop / Web Browser fallback (ONLY if not inside Android native app)
+  const isAndroid = Boolean(window.AndroidDownloader || (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()));
+  if (!isAndroid) {
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = filename || 'download.mp4';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+}
+
+function triggerOpenFile(filenameOrPath, mimeType) {
+  if (window.AndroidDownloader && typeof window.AndroidDownloader.openDownloadedFile === 'function') {
+    const filename = filenameOrPath ? filenameOrPath.split(/[\\/]/).pop() : '';
+    window.AndroidDownloader.openDownloadedFile(filename, mimeType || '');
+    return;
+  }
+  if (window.AndroidDownloader && typeof window.AndroidDownloader.openDownloadsFolder === 'function') {
+    window.AndroidDownloader.openDownloadsFolder();
+    return;
+  }
+  if (window.api && typeof window.api.openFile === 'function') {
+    window.api.openFile(filenameOrPath);
+  }
+}
+
+function triggerOpenFolder(folderPath) {
+  if (window.AndroidDownloader && typeof window.AndroidDownloader.openDownloadsFolder === 'function') {
+    window.AndroidDownloader.openDownloadsFolder();
+    return;
+  }
+  if (window.api && typeof window.api.openFolder === 'function') {
+    window.api.openFolder(folderPath);
+  }
+}
+
+// Hardware Back Button Handler for Android
+window.handleAndroidBackButton = function() {
+  // If Details Panel is open, go back to URL input
+  if (detailsPanel && !detailsPanel.classList.contains('hidden')) {
+    detailsPanel.classList.add('hidden');
+    currentVideoData = null;
+    videoUrlInput.value = '';
+    videoUrlInput.focus();
+    triggerHaptic(15);
+    return true;
+  }
+
+  // If Complete Panel is visible, reset view
+  if (completePanel && !completePanel.classList.contains('hidden')) {
+    completePanel.classList.add('hidden');
+    currentVideoData = null;
+    currentFilePath = null;
+    videoUrlInput.value = '';
+    triggerHaptic(15);
+    return true;
+  }
+
+  // If Error Message is visible, close it
+  if (errorMessage && !errorMessage.classList.contains('hidden')) {
+    errorMessage.classList.add('hidden');
+    triggerHaptic(15);
+    return true;
+  }
+
+  // If inside Obfuscator or History tab, switch back to Downloader
+  if (typeof currentAppView !== 'undefined' && currentAppView !== 'downloader') {
+    if (typeof switchAppView === 'function') {
+      switchAppView('downloader');
+      triggerHaptic(15);
+      return true;
+    }
+  }
+
+  return false;
+};
+
 // Safe API Bridge (Mobile / Web Fallback — fires when window.api is absent)
 if (!window.api) {
   console.log('[Web/Mobile] No Electron bridge — initializing Web/Server API...');
+
+  let currentDownloadAbortController = null;
 
   window.api = {
     onSetupStatus: async (cb) => {
@@ -250,10 +399,10 @@ if (!window.api) {
     },
     retrySetup: () => {},
     appLoaded: () => {},
-    getDefaultPath: async () => 'Downloads/YT-Obfuscated',
-    selectDirectory: async () => 'Downloads/YT-Obfuscated',
-    openFile: (path) => alert(`File saved to ${path}`),
-    openFolder: (path) => alert(`Check your ${path} folder for the downloads.`),
+    getDefaultPath: async () => 'Downloads',
+    selectDirectory: async () => 'Downloads',
+    openFile: (path) => triggerOpenFile(path),
+    openFolder: (path) => triggerOpenFolder(path),
     fetchInfo: async (url) => {
       const host = getApiHost();
       const token = getStoredAuthToken();
@@ -263,7 +412,7 @@ if (!window.api) {
       // 1. Try backend server if available
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
         const res = await fetch(`${host}/api/info?url=${encodeURIComponent(url)}`, { 
           headers,
           signal: controller.signal 
@@ -320,16 +469,26 @@ if (!window.api) {
     },
     startDownload: async (opts) => {
       try {
-        window.api._notifyProgress({ status: 'Connecting to server...', percent: 10 });
+        await acquireScreenWakeLock();
+        if (currentDownloadAbortController) {
+          try { currentDownloadAbortController.abort(); } catch (e) {}
+        }
+        currentDownloadAbortController = new AbortController();
+
+        window.api._notifyProgress({ status: 'Connecting to server...', percent: 5 });
         const host = getApiHost();
         const token = getStoredAuthToken();
-        const headers = { 'Content-Type': 'application/json' };
+        const headers = {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream, application/json'
+        };
         if (token) headers['x-access-token'] = token;
 
         const res = await fetch(`${host}/api/download`, {
           method: 'POST',
           headers,
-          body: JSON.stringify(opts)
+          body: JSON.stringify({ ...opts, stream: true }),
+          signal: currentDownloadAbortController.signal
         });
 
         if (res.status === 401) {
@@ -338,35 +497,122 @@ if (!window.api) {
           return;
         }
 
+        if (res.status === 429) {
+          const errData = await res.json().catch(() => ({}));
+          window.api._notifyError(errData.error || 'Server is busy with other downloads. Please try again shortly.');
+          return;
+        }
+
+        if (!res.ok && !res.headers.get('content-type')?.includes('text/event-stream')) {
+          const errData = await res.json().catch(() => ({}));
+          window.api._notifyError(errData.error || `Server error (${res.status})`);
+          return;
+        }
+
+        // Handle streaming real-time event updates
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('text/event-stream') && res.body && typeof res.body.getReader === 'function') {
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let completedData = null;
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // keep uncompleted line
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith('data:')) continue;
+              const jsonStr = trimmed.replace(/^data:\s*/, '');
+              if (!jsonStr) continue;
+
+              try {
+                const eventData = JSON.parse(jsonStr);
+                if (eventData.stage === 'error') {
+                  window.api._notifyError(eventData.error || 'Server failed to process the video.');
+                  return;
+                }
+                if (eventData.stage === 'complete' && eventData.success) {
+                  completedData = eventData;
+                } else {
+                  window.api._notifyProgress({
+                    status: eventData.status || 'Processing...',
+                    percent: eventData.percent !== undefined ? eventData.percent : 50,
+                    speed: eventData.speed || '',
+                    eta: eventData.eta || '',
+                    size: eventData.size || ''
+                  });
+                }
+              } catch (parseErr) {
+                console.warn('[Stream Parse Error]:', parseErr);
+              }
+            }
+          }
+
+          if (completedData && completedData.downloadUrl) {
+            window.api._notifyProgress({ status: 'Downloading file to your device...', percent: 100 });
+            const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
+            const fullDownloadUrl = `${host}${completedData.downloadUrl}${tokenQuery}`;
+            const filename = completedData.filename || 'download.mp4';
+            const mimeType = (filename.endsWith('.mp3') || (opts && opts.type === 'audio')) ? 'audio/mpeg' : 'video/mp4';
+
+            // Trigger in-app native device download without opening Chrome
+            triggerDeviceDownload(fullDownloadUrl, filename, mimeType);
+
+            setTimeout(() => {
+              window.api._notifyComplete({ filepath: completedData.filename });
+            }, 1200);
+            return;
+          } else {
+            window.api._notifyError('Download stream ended unexpectedly without producing a file.');
+            return;
+          }
+        }
+
+        // Fallback for non-streaming response
         const data = await res.json();
         if (data.success && data.downloadUrl) {
           window.api._notifyProgress({ status: 'Downloading file to your device...', percent: 100 });
           
-          // Trigger actual download to user's device
-          const downloadLink = document.createElement('a');
           const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
-          downloadLink.href = `${host}${data.downloadUrl}${tokenQuery}`;
-          downloadLink.download = data.filename || 'download.mp4';
-          document.body.appendChild(downloadLink);
-          downloadLink.click();
-          document.body.removeChild(downloadLink);
+          const fullDownloadUrl = `${host}${data.downloadUrl}${tokenQuery}`;
+          const filename = data.filename || 'download.mp4';
+          const mimeType = (filename.endsWith('.mp3') || (opts && opts.type === 'audio')) ? 'audio/mpeg' : 'video/mp4';
+
+          triggerDeviceDownload(fullDownloadUrl, filename, mimeType);
           
           setTimeout(() => {
             window.api._notifyComplete({ filepath: data.filename });
-          }, 1500);
+          }, 1200);
         } else {
           window.api._notifyError(data.error || 'Server failed to process the video.');
         }
       } catch (err) {
-        window.api._notifyError('Cannot connect to server. Please ensure server.js is running.');
+        if (err.name === 'AbortError') {
+          console.log('[Web/Mobile Download] Download aborted by user.');
+          return;
+        }
+        window.api._notifyError(err.message || 'Cannot connect to server. Please check your internet connection.');
+      } finally {
+        releaseScreenWakeLock();
+        currentDownloadAbortController = null;
       }
     },
-    cancelDownload: () => {},
+    cancelDownload: () => {
+      releaseScreenWakeLock();
+      if (currentDownloadAbortController) {
+        try { currentDownloadAbortController.abort(); } catch (e) {}
+        currentDownloadAbortController = null;
+      }
+    },
     onDownloadProgress: (cb) => { window.api._notifyProgress = cb; },
     onDownloadComplete: (cb) => { window.api._notifyComplete = cb; },
     onDownloadError: (cb) => { window.api._notifyError = cb; },
-    openFolder: () => {},
-    openFile: () => {},
     getFilePathForDroppedFile: () => '',
     obfuscateLocalFile: async () => { throw new Error('Native local obfuscation requires Desktop Electron.'); },
     onObfuscateProgress: (cb) => { window.api._notifyObfProgress = cb; }
@@ -495,11 +741,12 @@ if (pasteBtn) {
         text = await navigator.clipboard.readText();
       }
       
-      if (text && (text.includes('youtube.com') || text.includes('youtu.be') || text.includes('instagram.com'))) {
+      if (text && (text.includes('youtube.com') || text.includes('youtu.be') || text.includes('instagram.com') || text.includes('tiktok.com') || text.includes('vt.tiktok.com'))) {
         videoUrlInput.value = text.trim();
         analyzeBtn.click();
       } else if (text) {
         videoUrlInput.value = text.trim();
+        videoUrlInput.dispatchEvent(new Event('input'));
       }
     } catch (err) {
       console.error('Clipboard read failed:', err);
@@ -522,7 +769,12 @@ const downloaderView = document.getElementById('downloader-view');
 const obfuscatorView = document.getElementById('obfuscator-view');
 const historyView = document.getElementById('history-view');
 
+let currentAppView = 'downloader';
+
 function switchAppView(view) {
+  currentAppView = view;
+  triggerHaptic(15);
+
   // Update desktop tabs
   if (tabDownloaderBtn) {
     tabDownloaderBtn.classList.toggle('active', view === 'downloader');
@@ -651,11 +903,26 @@ function formatDate(dateStr) {
   return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+// Invalidate analyzed video if the search bar input changes
+if (videoUrlInput) {
+  videoUrlInput.addEventListener('input', () => {
+    const currentText = videoUrlInput.value.trim();
+    if (currentVideoData && currentVideoData.analyzedUrl && currentText !== currentVideoData.analyzedUrl) {
+      // Hide details panel and clear active video data until re-analyzed
+      detailsPanel.classList.add('hidden');
+      detailsPanel.style.display = 'none';
+      currentVideoData = null;
+    }
+  });
+}
+
 // Submit Search URL Form (Supports YouTube & Instagram links)
 urlForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const url = videoUrlInput.value.trim();
   if (!url) return;
+
+  triggerHaptic(20);
 
   errorMessage.classList.add('hidden');
   detailsPanel.classList.add('hidden');
@@ -667,6 +934,7 @@ urlForm.addEventListener('submit', async (e) => {
 
   try {
     const info = await window.api.fetchInfo(url);
+    info.analyzedUrl = url;
     currentVideoData = info;
 
     const thumbUrl = info.thumbnail || info.thumbnails?.[0]?.url || '';
@@ -695,9 +963,25 @@ urlForm.addEventListener('submit', async (e) => {
 
 // Trigger Download Flow
 downloadBtn.addEventListener('click', () => {
-  if (!currentVideoData) return;
+  if (!currentVideoData) {
+    errorMessage.textContent = 'Please analyze a video first before downloading.';
+    errorMessage.classList.remove('hidden');
+    return;
+  }
 
-  const url = videoUrlInput.value.trim();
+  triggerHaptic(30);
+
+  // ALWAYS download the analyzed video URL, never arbitrary text currently in the search bar!
+  const url = (currentVideoData && currentVideoData.analyzedUrl)
+    ? currentVideoData.analyzedUrl
+    : (currentVideoData.webpage_url || currentVideoData.original_url || '');
+
+  if (!url) {
+    errorMessage.textContent = 'Please analyze a video first before downloading.';
+    errorMessage.classList.remove('hidden');
+    return;
+  }
+
   const formatId = qualitySelect.value;
   const type = typeVideo.checked ? 'video' : 'audio';
   const containerFormat = formatMp4.checked ? 'mp4' : 'webm';
@@ -794,10 +1078,11 @@ cancelBtn.addEventListener('click', () => {
 
 // Show completed file in folder
 openFileBtn.addEventListener('click', () => {
+  triggerHaptic(20);
   if (currentFilePath) {
-    window.api.openFile(currentFilePath);
+    triggerOpenFile(currentFilePath);
   } else {
-    window.api.openFolder(savePathInput.value);
+    triggerOpenFolder(savePathInput.value);
   }
 });
 
@@ -909,18 +1194,17 @@ function renderHistory() {
     `;
 
     li.querySelector('.btn-open').addEventListener('click', () => {
+      triggerHaptic(20);
       if (item.downloadUrl) {
         const host = getApiHost();
         const token = getStoredAuthToken();
         const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-        const a = document.createElement('a');
-        a.href = `${host}${item.downloadUrl}${tokenParam}`;
-        a.download = item.title || 'media_file';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        const fullUrl = `${host}${item.downloadUrl}${tokenParam}`;
+        const filename = item.filename || `${item.title || 'media_file'}.mp4`;
+        const mimeType = item.type === 'audio' ? 'audio/mpeg' : 'video/mp4';
+        triggerDeviceDownload(fullUrl, filename, mimeType);
       } else {
-        window.api.openFile(item.filepath);
+        triggerOpenFile(item.filepath);
       }
     });
 
@@ -1407,12 +1691,22 @@ function showObfComplete(result, hostUrl = '') {
     }
   }
 
-  // Handle Desktop "Show in Folder" vs Web "Download Clean File"
+  // Handle Desktop "Show in Folder" vs Mobile / Web "Download Clean File"
   const isDesktop = Boolean(result.outputPath && window.api && typeof window.api.openFile === 'function');
+  const isAndroidNative = Boolean(window.AndroidDownloader && typeof window.AndroidDownloader.openDownloadedFile === 'function');
   if (obfOpenFileBtn) {
     if (isDesktop) {
       obfOpenFileBtn.classList.remove('hidden');
-      obfOpenFileBtn.onclick = () => window.api.openFile(result.outputPath);
+      obfOpenFileBtn.onclick = () => {
+        triggerHaptic(20);
+        window.api.openFile(result.outputPath);
+      };
+    } else if (isAndroidNative && (result.filename || result.outputPath)) {
+      obfOpenFileBtn.classList.remove('hidden');
+      obfOpenFileBtn.onclick = () => {
+        triggerHaptic(20);
+        triggerOpenFile(result.filename || result.outputPath, 'video/mp4');
+      };
     } else {
       obfOpenFileBtn.classList.add('hidden');
     }
@@ -1425,12 +1719,8 @@ function showObfComplete(result, hostUrl = '') {
       const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
       const fullUrl = `${hostUrl || getApiHost()}${result.downloadUrl}${tokenParam}`;
       obfDownloadBtn.onclick = () => {
-        const a = document.createElement('a');
-        a.href = fullUrl;
-        a.download = result.filename || 'obfuscated_media.mp4';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        const filename = result.filename || 'obfuscated_media.mp4';
+        triggerDeviceDownload(fullUrl, filename, 'video/mp4');
       };
       // Auto-trigger download on mobile/web
       setTimeout(() => obfDownloadBtn.click(), 600);
