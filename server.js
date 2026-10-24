@@ -4,11 +4,15 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const dns = require('dns').promises;
+const net = require('net');
 const ffmpeg = require('ffmpeg-static');
 const {
   probeMediaInfo,
   processMediaObfuscation,
   ensureAppleMediaCompatibility,
+  moveFileSafely,
+  resolveUniqueDestination,
   SUPPORTED_EXTENSIONS
 } = require('./media-obfuscator');
 
@@ -27,10 +31,20 @@ if (fs.existsSync(envFile)) {
 }
 
 const app = express();
-app.set('trust proxy', 1); // Trust first reverse proxy hop (Nginx / DuckDNS) for accurate client IP
+// Number of reverse-proxy hops to trust for client IP. Use 0 if Node is exposed directly (otherwise X-Forwarded-For is spoofable).
+app.set('trust proxy', parseInt(process.env.TRUST_PROXY ?? '1', 10));
 const PORT = process.env.PORT || 3000;
-// Default to 'download123' if not set in environment. Set APP_PASSWORD="" to disable auth.
-const APP_PASSWORD = process.env.APP_PASSWORD !== undefined ? process.env.APP_PASSWORD : 'download123';
+const HOST = process.env.HOST || '0.0.0.0'; // use 127.0.0.1 when Nginx proxies to this process
+// Auth fails closed: the server refuses to start without a password unless ALLOW_NO_AUTH=1 is set explicitly.
+const APP_PASSWORD = process.env.APP_PASSWORD || '';
+if (!APP_PASSWORD.trim() && process.env.ALLOW_NO_AUTH !== '1') {
+  console.error('FATAL: APP_PASSWORD is not set. Set it in .env (or set ALLOW_NO_AUTH=1 to run without auth).');
+  process.exit(1);
+}
+if (APP_PASSWORD === 'download123') {
+  console.error('FATAL: APP_PASSWORD is the publicly known default. Choose a different password.');
+  process.exit(1);
+}
 
 // Session token management: map of token -> { createdAt }
 // Tokens are random hex strings, NOT the password itself
@@ -147,6 +161,8 @@ const ffmpegBin = resolvedFfmpeg || 'ffmpeg';
 if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir, { recursive: true });
 }
+const jobsDir = path.join(downloadsDir, '.jobs');
+fs.mkdirSync(jobsDir, { recursive: true });
 const uploadTempDir = path.join(downloadsDir, '.uploads_temp');
 if (!fs.existsSync(uploadTempDir)) {
   fs.mkdirSync(uploadTempDir, { recursive: true });
@@ -172,6 +188,13 @@ setInterval(() => {
       }
     }
 
+    for (const d of fs.existsSync(jobsDir) ? fs.readdirSync(jobsDir) : []) {
+      const dPath = path.join(jobsDir, d);
+      try {
+        if (now - fs.statSync(dPath).mtimeMs > 2 * 60 * 60 * 1000) fs.rmSync(dPath, { recursive: true, force: true });
+      } catch (e) { }
+    }
+
     if (fs.existsSync(uploadTempDir)) {
       const tempFiles = fs.readdirSync(uploadTempDir);
       for (const tf of tempFiles) {
@@ -190,18 +213,64 @@ setInterval(() => {
   }
 }, 15 * 60 * 1000);
 
-// URL Validation: Prevent yt-dlp flag injection & restrict to HTTP(S) URLs
-function isValidMediaUrl(url) {
-  if (!url || typeof url !== 'string') return false;
+// URL Validation: Prevent yt-dlp flag injection & restrict to public HTTP(S) hosts
+function isPrivateAddress(addr) {
+  if (net.isIPv4(addr)) {
+    const [a, b] = addr.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  if (net.isIPv6(addr)) {
+    const l = addr.toLowerCase();
+    if (l === '::1' || l === '::' || l.startsWith('fe80') || l.startsWith('fc') || l.startsWith('fd')) return true;
+    const mapped = l.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    return mapped ? isPrivateAddress(mapped[1]) : false;
+  }
+  return true;
+}
+
+// Blocks loopback / link-local (AWS metadata 169.254.169.254) / private-network targets (SSRF).
+async function isValidMediaUrl(url) {
+  if (!url || typeof url !== 'string' || url.length > 2048) return false;
   const trimmed = url.trim();
   if (trimmed.startsWith('-')) return false; // Block flag injection (e.g. --exec)
+  let parsed;
   try {
-    const parsed = new URL(trimmed);
-    return ['http:', 'https:'].includes(parsed.protocol);
+    parsed = new URL(trimmed);
+  } catch (e) {
+    return false;
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return false;
+  try {
+    const addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true });
+    return addrs.length > 0 && !addrs.some(a => isPrivateAddress(a.address));
   } catch (e) {
     return false;
   }
 }
+
+// Kill a spawned process and its children (yt-dlp spawns ffmpeg).
+function killTree(child) {
+  if (!child || !child.pid) return;
+  try {
+    if (isWin) {
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      process.kill(-child.pid, 'SIGKILL'); // child is spawned detached => own process group
+    }
+  } catch (e) {
+    try { child.kill('SIGKILL'); } catch (e2) { }
+  }
+}
+const runningChildren = new Set();
+function shutdown() {
+  for (const c of runningChildren) killTree(c);
+  process.exit(0);
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
 // Download concurrency limiter
 const MAX_CONCURRENT_DOWNLOADS = 3;
@@ -269,8 +338,10 @@ app.post('/api/auth/verify', (req, res) => {
   const { password } = req.body || {};
   // Constant-time comparison to prevent timing attacks
   if (password && typeof password === 'string' &&
-      password.length === APP_PASSWORD.length &&
-      crypto.timingSafeEqual(Buffer.from(password), Buffer.from(APP_PASSWORD))) {
+      crypto.timingSafeEqual(
+        crypto.createHash('sha256').update(password).digest(),
+        crypto.createHash('sha256').update(APP_PASSWORD).digest()
+      )) {
     clearFailedAttempts(clientIp);
     const sessionToken = generateSessionToken();
     activeSessions.set(sessionToken, { createdAt: Date.now() });
@@ -282,13 +353,13 @@ app.post('/api/auth/verify', (req, res) => {
 });
 
 // Fetch Metadata Info API (Protected)
-app.get('/api/info', checkAuth, (req, res) => {
+app.get('/api/info', checkAuth, async (req, res) => {
   const videoUrl = req.query.url;
   if (!videoUrl) {
     return res.status(400).json({ error: 'URL parameter is required' });
   }
-  if (!isValidMediaUrl(videoUrl)) {
-    return res.status(400).json({ error: 'Invalid URL. Only http:// and https:// URLs are allowed.' });
+  if (typeof videoUrl !== 'string' || !(await isValidMediaUrl(videoUrl))) {
+    return res.status(400).json({ error: 'Invalid URL. Only public http:// and https:// URLs are allowed.' });
   }
 
   const cookiesPath = path.join(__dirname, 'cookies.txt');
@@ -297,6 +368,7 @@ app.get('/api/info', checkAuth, (req, res) => {
 
   const infoArgs = [
     '-j',
+    '--no-playlist',
     '--no-warnings',
     '--socket-timeout', '20',
     '--extractor-retries', '2',
@@ -309,7 +381,9 @@ app.get('/api/info', checkAuth, (req, res) => {
 
   infoArgs.push(videoUrl);
 
-  const child = spawn(binToUse, infoArgs);
+  const child = spawn(binToUse, infoArgs, { detached: !isWin });
+  runningChildren.add(child);
+  child.on('close', () => runningChildren.delete(child));
 
   let stdout = '';
   let stderr = '';
@@ -318,7 +392,7 @@ app.get('/api/info', checkAuth, (req, res) => {
   const infoTimer = setTimeout(() => {
     if (!settled) {
       settled = true;
-      try { child.kill('SIGKILL'); } catch (e) {}
+      killTree(child);
       res.status(504).json({ error: 'Video analysis timed out. Please check the URL and try again.' });
     }
   }, 25000);
@@ -355,15 +429,15 @@ app.get('/api/info', checkAuth, (req, res) => {
 });
 
 // Download & Sanitize API (Protected, Streaming Progress Enabled)
-app.post('/api/download', checkAuth, (req, res) => {
+app.post('/api/download', checkAuth, async (req, res) => {
   const { url, formatId, type, containerFormat, obfuscate = true, stream = false } = req.body || {};
   const isStreamRequested = stream === true || req.headers.accept?.includes('text/event-stream');
 
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
   }
-  if (!isValidMediaUrl(url)) {
-    return res.status(400).json({ error: 'Invalid URL. Only http:// and https:// URLs are allowed.' });
+  if (!(await isValidMediaUrl(url))) {
+    return res.status(400).json({ error: 'Invalid URL. Only public http:// and https:// URLs are allowed.' });
   }
 
   // Enforce concurrent download limit
@@ -478,13 +552,30 @@ app.post('/api/download', checkAuth, (req, res) => {
     }
   }
 
-  const outputTemplate = path.join(downloadsDir, 'temp_download_%(id)s.%(ext)s');
-  args.push('-o', outputTemplate, url);
+  // Each job gets its own directory so concurrent downloads of the same video can't collide
+  // and the output file is identified exactly (never "newest file in the folder").
+  const jobDir = path.join(jobsDir, crypto.randomBytes(6).toString('hex'));
+  fs.mkdirSync(jobDir, { recursive: true });
+  const pathFile = path.join(jobDir, '.final_path.txt');
+  const removeJobDir = () => { try { fs.rmSync(jobDir, { recursive: true, force: true }); } catch (e) { } };
 
-  const child = spawn(binToUse, args);
-  let filepath = '';
+  args.push(
+    '--no-playlist',
+    '--newline',
+    '--max-filesize', process.env.MAX_DOWNLOAD_SIZE || '2G',
+    '--print-to-file', 'after_move:filepath', pathFile
+  );
+  args.push('-o', path.join(jobDir, '%(id)s.%(ext)s'), '--', url.trim());
+
+  const child = spawn(binToUse, args, { detached: !isWin });
+  runningChildren.add(child);
   let stderr = '';
   let responded = false;
+
+  const abortJob = () => {
+    killTree(child);
+    removeJobDir();
+  };
 
   // Maximum 12-minute watchdog to prevent stuck processes from locking download slots
   const downloadTimer = setTimeout(() => {
@@ -492,13 +583,7 @@ app.post('/api/download', checkAuth, (req, res) => {
       responded = true;
       cleanupHeartbeat();
       releaseDownloadSlot();
-      try {
-        if (process.platform === 'win32' && child.pid) {
-          exec(`taskkill /pid ${child.pid} /T /F`);
-        } else {
-          child.kill('SIGKILL');
-        }
-      } catch (e) {}
+      abortJob();
       const errMsg = 'Download timed out after 12 minutes.';
       if (isStreamRequested) {
         sendEvent({ stage: 'error', error: errMsg });
@@ -516,166 +601,149 @@ app.post('/api/download', checkAuth, (req, res) => {
       cleanupHeartbeat();
       clearTimeout(downloadTimer);
       releaseDownloadSlot();
-      if (child && !child.killed) {
-        try {
-          if (process.platform === 'win32' && child.pid) {
-            exec(`taskkill /pid ${child.pid} /T /F`);
-          } else {
-            child.kill('SIGKILL');
-          }
-        } catch (e) {}
-      }
+      abortJob();
     }
   });
 
+  let stdoutBuf = '';
   child.stdout.on('data', (data) => {
-    const text = data.toString();
-    console.log(`[yt-dlp stdout] ${text.trim()}`);
-    const destMatch = text.match(/Destination:\s*(.+)$/m);
-    const audioDestMatch = text.match(/\[ExtractAudio\] Destination:\s*(.+)$/m);
-    const mergeMatch = text.match(/Merging formats into\s*["']?([^"'\r\n]+)["']?/);
-    if (destMatch) filepath = destMatch[1].replace(/^["']|["']$/g, '').trim();
-    if (audioDestMatch) filepath = audioDestMatch[1].replace(/^["']|["']$/g, '').trim();
-    if (mergeMatch) filepath = mergeMatch[1].replace(/^["']|["']$/g, '').trim();
+    stdoutBuf += data.toString();
+    const lines = stdoutBuf.split(/\r?\n/);
+    stdoutBuf = lines.pop();
+    for (const text of lines) {
+      if (text.startsWith('[download]')) {
+        const matchPercent = text.match(/(\d+(?:\.\d+)?)%/);
+        const matchSpeed = text.match(/at\s+([^\s]+)/);
+        const matchEta = text.match(/ETA\s+([^\s]+)/);
+        const matchSize = text.match(/of\s+~?\s*([^\s]+)/);
 
-    if (text.includes('[download]')) {
-      const matchPercent = text.match(/(\d+(?:\.\d+)?)%/);
-      const matchSpeed = text.match(/at\s+([^\s]+)/);
-      const matchEta = text.match(/ETA\s+([^\s]+)/);
-      const matchSize = text.match(/of\s+([^\s]+)/);
-
-      if (matchPercent) {
-        const rawP = parseFloat(matchPercent[1]);
-        const scaled = Math.min(85, Math.round(10 + rawP * 0.75));
-        sendEvent({
-          stage: 'downloading',
-          status: `Downloading media (${matchPercent[1]}%)...`,
-          percent: scaled,
-          speed: matchSpeed ? matchSpeed[1] : '',
-          eta: matchEta ? matchEta[1] : '',
-          size: matchSize ? matchSize[1] : ''
-        });
+        if (matchPercent) {
+          const rawP = parseFloat(matchPercent[1]);
+          const scaled = Math.min(85, Math.round(10 + rawP * 0.75));
+          sendEvent({
+            stage: 'downloading',
+            status: `Downloading media (${matchPercent[1]}%)...`,
+            percent: scaled,
+            speed: matchSpeed ? matchSpeed[1] : '',
+            eta: matchEta ? matchEta[1] : '',
+            size: matchSize ? matchSize[1] : ''
+          });
+        }
+      } else if (text.includes('[ExtractAudio]')) {
+        sendEvent({ stage: 'converting', status: 'Converting audio to MP3...', percent: 86 });
+      } else if (text.includes('[ffmpeg]') || text.includes('[Merger]')) {
+        sendEvent({ stage: 'merging', status: 'Merging video & audio streams...', percent: 88 });
       }
-    } else if (text.includes('[ExtractAudio]')) {
-      sendEvent({
-        stage: 'converting',
-        status: 'Converting audio to MP3...',
-        percent: 86
-      });
-    } else if (text.includes('[ffmpeg]') || text.includes('[Merger]')) {
-      sendEvent({
-        stage: 'merging',
-        status: 'Merging video & audio streams...',
-        percent: 88
-      });
     }
   });
 
   child.stderr.on('data', (data) => {
-    const text = data.toString();
-    stderr += text;
-    console.warn(`[yt-dlp stderr] ${text.trim()}`);
+    // Keep only the tail: error bodies can be large, and only the last lines matter.
+    stderr = (stderr + data.toString()).slice(-4000);
   });
 
   child.on('error', (err) => {
+    runningChildren.delete(child);
     clearTimeout(downloadTimer);
     cleanupHeartbeat();
+    removeJobDir();
     if (responded) return;
     responded = true;
     releaseDownloadSlot();
+    console.error('[Download Error] spawn failed:', err.message);
+    const msg = 'Failed to start yt-dlp. Is it installed on the server?';
     if (isStreamRequested) {
-      sendEvent({ stage: 'error', error: `Failed to start yt-dlp: ${err.message}` });
+      sendEvent({ stage: 'error', error: msg });
       res.end();
     } else {
-      res.status(500).json({ error: `Failed to start yt-dlp: ${err.message}` });
+      res.status(500).json({ error: msg });
     }
   });
 
+  // Last meaningful stderr line, without server paths, for the client.
+  const clientError = () => {
+    const lines = stderr.trim().split('\n');
+    const line = lines.filter(l => /ERROR/.test(l)).pop() || lines.pop() || 'Download failed';
+    return line.replace(/\/[^\s'"]*/g, '<path>').replace(/[A-Za-z]:\\[^\s'"]*/g, '<path>').slice(0, 300);
+  };
+
+  const fail = (message) => {
+    responded = true;
+    releaseDownloadSlot();
+    removeJobDir();
+    if (isStreamRequested) {
+      sendEvent({ stage: 'error', error: message });
+      res.end();
+    } else {
+      res.status(500).json({ error: message });
+    }
+  };
+
   child.on('close', async (code) => {
+    runningChildren.delete(child);
     clearTimeout(downloadTimer);
     cleanupHeartbeat();
     if (responded) { releaseDownloadSlot(); return; }
 
-    if (code === 0) {
-      let cleanPath = (filepath || '').replace(/^["']|["']$/g, '').trim();
+    if (code !== 0) {
+      console.error(`[Download Error] yt-dlp failed (code ${code}):`, stderr);
+      return fail(clientError());
+    }
 
-      if (!cleanPath || !fs.existsSync(cleanPath)) {
-        const files = fs.readdirSync(downloadsDir)
-          .map(f => path.join(downloadsDir, f))
-          .filter(f => fs.statSync(f).isFile() && !f.endsWith('.part'))
-          .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-        if (files.length > 0) cleanPath = files[0];
+    try {
+      // Exit code 0 is not proof of success: confirm the exact file yt-dlp reported exists and is non-empty.
+      let producedPath = '';
+      try {
+        producedPath = fs.readFileSync(pathFile, 'utf8').split(/\r?\n/).filter(Boolean).pop() || '';
+      } catch (e) { }
+      const resolvedProduced = producedPath ? path.resolve(producedPath) : '';
+      if (!resolvedProduced || !resolvedProduced.startsWith(path.resolve(jobDir) + path.sep) ||
+          !fs.existsSync(resolvedProduced) || fs.statSync(resolvedProduced).size === 0) {
+        console.error('[Download Error] yt-dlp exited 0 but produced no usable file. stderr:', stderr);
+        return fail('Download finished but no output file was produced.');
       }
 
-      let finalPath = cleanPath;
-      if (cleanPath && fs.existsSync(cleanPath)) {
-        if (type !== 'audio' && (containerFormat === 'mp4' || !containerFormat)) {
-          sendEvent({
-            stage: 'optimizing',
-            status: 'Optimizing for iOS / Apple compatibility...',
-            percent: 92
-          });
-          finalPath = await ensureAppleMediaCompatibility(ffmpegBin, cleanPath);
-        }
+      let finalPath = resolvedProduced;
+      if (type !== 'audio' && (containerFormat === 'mp4' || !containerFormat)) {
+        sendEvent({ stage: 'optimizing', status: 'Optimizing for iOS / Apple compatibility...', percent: 92 });
+        finalPath = await ensureAppleMediaCompatibility(ffmpegBin, finalPath);
+      }
 
-        if (obfuscate && finalPath && fs.existsSync(finalPath)) {
-          sendEvent({
-            stage: 'obfuscating',
-            status: 'Scrubbing metadata and signatures...',
-            percent: 96
-          });
-          try {
-            const obfResult = await processMediaObfuscation(
-              ffmpegBin,
-              finalPath,
-              downloadsDir,
-              { signatureKey: 'adobe-premiere', timestampMode: 'random-past' }
-            );
-            if (obfResult && obfResult.outputPath) {
-              if (obfResult.outputPath !== finalPath) {
-                try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath); } catch (e) {}
-              }
-              finalPath = obfResult.outputPath;
-            }
-          } catch (obfErr) {
-            console.warn('[Server Obfuscate Warning]:', obfErr.message);
-          }
+      let publishedPath = null;
+      if (obfuscate && fs.existsSync(finalPath)) {
+        sendEvent({ stage: 'obfuscating', status: 'Scrubbing metadata and signatures...', percent: 96 });
+        try {
+          const obfResult = await processMediaObfuscation(
+            ffmpegBin,
+            finalPath,
+            downloadsDir,
+            { signatureKey: 'adobe-premiere', timestampMode: 'random-past' }
+          );
+          if (obfResult && obfResult.outputPath) publishedPath = obfResult.outputPath;
+        } catch (obfErr) {
+          console.warn('[Server Obfuscate Warning]:', obfErr.message);
         }
       }
+      if (!publishedPath) {
+        publishedPath = resolveUniqueDestination(downloadsDir, path.basename(finalPath), finalPath);
+        moveFileSafely(finalPath, publishedPath);
+      }
+      removeJobDir();
 
       responded = true;
       releaseDownloadSlot();
-      const filename = path.basename(finalPath);
+      const filename = path.basename(publishedPath);
       const downloadUrl = `/api/file/${encodeURIComponent(filename)}`;
 
       if (isStreamRequested) {
-        sendEvent({
-          stage: 'complete',
-          status: 'Ready to save',
-          percent: 100,
-          success: true,
-          filename,
-          downloadUrl
-        });
+        sendEvent({ stage: 'complete', status: 'Ready to save', percent: 100, success: true, filename, downloadUrl });
         res.end();
       } else {
-        res.json({
-          success: true,
-          filename,
-          downloadUrl
-        });
+        res.json({ success: true, filename, downloadUrl });
       }
-    } else {
-      responded = true;
-      releaseDownloadSlot();
-      console.error(`[Download Error] yt-dlp failed (code ${code}):`, stderr);
-      const errorMsg = stderr.trim() || 'Download failed';
-      if (isStreamRequested) {
-        sendEvent({ stage: 'error', error: errorMsg });
-        res.end();
-      } else {
-        res.status(500).json({ error: errorMsg });
-      }
+    } catch (postErr) {
+      console.error('[Download Error] post-processing failed:', postErr);
+      fail('Post-processing failed.');
     }
   });
 });
@@ -695,7 +763,7 @@ app.get('/api/file/:filename', checkAuth, (req, res) => {
     return res.status(400).json({ error: 'Invalid filename' });
   }
 
-  if (fs.existsSync(resolved)) {
+  if (fs.existsSync(resolved) && fs.statSync(resolved).isFile() && !requested.startsWith('.')) {
     res.setHeader('Accept-Ranges', 'bytes');
     res.download(resolved);
   } else {
@@ -874,9 +942,9 @@ app.post('/api/obfuscate-upload', checkAuth, (req, res) => {
 
 
 
-app.listen(PORT, () => {
+app.listen(PORT, HOST, () => {
   console.log(`\n======================================================`);
-  console.log(`🚀 YT Downloader Pro Server running on http://localhost:${PORT}`);
+  console.log(`🚀 YT Downloader Pro Server running on http://${HOST}:${PORT}`);
   if (APP_PASSWORD && APP_PASSWORD.trim().length > 0) {
     console.log(`🔒 Password Protection: ENABLED`);
   } else {
