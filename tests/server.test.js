@@ -126,6 +126,15 @@ describe('server API', () => {
     });
   }
 
+  test('malformed JSON gets a plain 400 without a stack trace', async () => {
+    const r = await fetch(`${BASE}/api/auth/verify`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '0x%5B%5D=DTAB'
+    });
+    assert.strictEqual(r.status, 400);
+    const text = await r.text();
+    assert.ok(!/node_modules|at JSON\.parse|SyntaxError/.test(text), text);
+  });
+
   test('file route blocks traversal and hidden entries', async () => {
     for (const name of ['..%2F..%2Fetc%2Fpasswd', '.jobs', '.uploads_temp']) {
       const r = await fetch(`${BASE}/api/file/${name}`, { headers: { 'x-access-token': token } });

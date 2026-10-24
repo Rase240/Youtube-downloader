@@ -1026,6 +1026,19 @@ app.post('/api/obfuscate-upload', checkAuth, (req, res) => {
 
 
 
+// Final error handler: without it Express sends stack traces (server paths) to the client, e.g. when
+// internet scanners post malformed JSON. Logs one line instead of a full trace for bad requests.
+app.use((err, req, res, next) => {
+  const status = err.status || err.statusCode || 500;
+  if (status >= 500) {
+    console.error('[Server Error]', err);
+  } else {
+    console.warn(`[Bad Request] ${status} ${req.method} ${req.path}: ${err.type || err.message}`);
+  }
+  if (res.headersSent) return next(err);
+  res.status(status).json({ error: status >= 500 ? 'Internal server error' : 'Bad request' });
+});
+
 // Startup dependency check: a missing or outdated yt-dlp otherwise only shows up as failed downloads.
 function checkDependencies() {
   const bin = fs.existsSync(ytdlpPath) ? ytdlpPath : 'yt-dlp';
