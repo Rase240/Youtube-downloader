@@ -233,6 +233,7 @@ ipcMain.handle('fetch-info', async (event, url) => {
 
     const infoArgs = [
       '-j',
+      '--no-playlist',
       '--no-warnings',
       '--socket-timeout', '20',
       '--extractor-retries', '2',
@@ -307,6 +308,7 @@ ipcMain.on('start-download', (event, { url, formatId, type, containerFormat, out
   const hasCookies = Boolean(cookiesPath && fs.existsSync(cookiesPath));
 
   const args = [
+    '--no-playlist',
     '--no-warnings',
     '--restrict-filenames',
     '--throttled-rate', '100K',
@@ -513,7 +515,7 @@ ipcMain.on('open-folder', (event, folderPath) => {
         shell.showItemInFolder(folderPath);
       }
     } catch (e) {
-      shell.openPath(folderPath);
+      // Never fall back to openPath on a non-directory: it would launch the file.
     }
   }
 });

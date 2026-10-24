@@ -170,7 +170,7 @@ async function verifyPasswordWithServer(password) {
     });
     if (res.ok) {
       const data = await res.json();
-      return { success: true, token: data.token || password };
+      return { success: true, token: data.token || '' };
     }
     if (res.status === 429) {
       const errData = await res.json().catch(() => ({}));
@@ -409,23 +409,29 @@ if (!window.api) {
       const headers = {};
       if (token) headers['x-access-token'] = token;
 
-      // 1. Try backend server if available
+      // 1. Try backend server. If it answers with an error (private / unavailable video, bad URL),
+      // show that error: downloads go through the same server and would fail anyway.
+      let res = null;
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
-        const res = await fetch(`${host}/api/info?url=${encodeURIComponent(url)}`, { 
+        // Longer than the server's own 25 s analysis timeout, so its error message reaches the user.
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
+        res = await fetch(`${host}/api/info?url=${encodeURIComponent(url)}`, {
           headers,
-          signal: controller.signal 
+          signal: controller.signal
         });
         clearTimeout(timeoutId);
+      } catch (e) {
+        res = null; // Server unreachable: fall through to oEmbed preview
+      }
+      if (res) {
         if (res.ok) return await res.json();
         if (res.status === 401) {
           showAuthScreen();
           throw new Error('Authentication required. Please unlock the server.');
         }
-      } catch (e) {
-        if (e.message && e.message.includes('Authentication')) throw e;
-        // Fall through to live oEmbed metadata fetcher
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server error (${res.status})`);
       }
 
       // Extract YouTube Video ID
@@ -446,9 +452,9 @@ if (!window.api) {
             return {
               title: odata.title,
               uploader: odata.author_name || 'YouTube Creator',
-              duration: 210,
-              view_count: 185000,
-              upload_date: '20260725',
+              duration: 0,
+              view_count: 0,
+              upload_date: '',
               thumbnail: realThumb
             };
           }
@@ -643,7 +649,7 @@ if (authForm && authPasswordInput) {
 
     const result = await verifyPasswordWithServer(pwd);
     if (result.success) {
-      setStoredAuthToken(result.token || pwd);
+      setStoredAuthToken(result.token);
       if (authScreen) authScreen.classList.add('hidden');
       if (appContainer) appContainer.classList.remove('hidden');
       updateAuthUi(true);
@@ -945,9 +951,10 @@ urlForm.addEventListener('submit', async (e) => {
 
     videoDuration.textContent = formatDuration(info.duration);
     videoTitle.textContent = info.title || info.description?.slice(0, 60) || 'Untitled Video';
-    videoChannel.innerHTML = `<i class="fa-solid fa-circle-check channel-verify"></i> ${info.uploader || info.channel || 'Creator'}`;
-    videoViews.innerHTML = `<i class="fa-solid fa-eye"></i> ${formatViews(info.view_count)} views`;
-    videoDate.innerHTML = `<i class="fa-solid fa-calendar"></i> ${formatDate(info.upload_date)}`;
+    // Channel names and dates come from the remote site: escape them before using innerHTML.
+    videoChannel.innerHTML = `<i class="fa-solid fa-circle-check channel-verify"></i> ${escapeHtml(info.uploader || info.channel || 'Creator')}`;
+    videoViews.innerHTML = `<i class="fa-solid fa-eye"></i> ${escapeHtml(formatViews(info.view_count))} views`;
+    videoDate.innerHTML = `<i class="fa-solid fa-calendar"></i> ${escapeHtml(formatDate(info.upload_date))}`;
 
     updateQualityOptions();
     detailsPanel.classList.remove('hidden');

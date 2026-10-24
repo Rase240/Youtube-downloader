@@ -251,6 +251,13 @@ async function isValidMediaUrl(url) {
   }
 }
 
+// Last meaningful yt-dlp stderr line for the client, with server directories hidden.
+function sanitizeYtdlpError(stderr) {
+  const lines = (stderr || '').trim().split(/\r?\n/).filter(Boolean);
+  const line = lines.filter(l => /ERROR/.test(l)).pop() || lines.pop() || '';
+  return line.split(__dirname).join('<server>').slice(0, 300);
+}
+
 // Kill a spawned process and its children (yt-dlp spawns ffmpeg).
 function killTree(child) {
   if (!child || !child.pid) return;
@@ -379,7 +386,7 @@ app.get('/api/info', checkAuth, async (req, res) => {
     infoArgs.push('--cookies', cookiesPath);
   }
 
-  infoArgs.push(videoUrl);
+  infoArgs.push('--', videoUrl.trim());
 
   const child = spawn(binToUse, infoArgs, { detached: !isWin });
   runningChildren.add(child);
@@ -398,9 +405,8 @@ app.get('/api/info', checkAuth, async (req, res) => {
   }, 25000);
 
   child.stdout.on('data', (d) => { stdout += d.toString(); });
-  child.stderr.on('data', (d) => { 
-    stderr += d.toString(); 
-    console.warn(`[yt-dlp info stderr] ${d.toString()}`);
+  child.stderr.on('data', (d) => {
+    stderr = (stderr + d.toString()).slice(-4000);
   });
 
   child.on('error', (err) => {
@@ -417,13 +423,27 @@ app.get('/api/info', checkAuth, async (req, res) => {
     if (code === 0) {
       try {
         const info = JSON.parse(stdout);
-        res.json(info);
+        // Return only what the UI displays. The raw yt-dlp JSON is hundreds of KB and, when
+        // cookies.txt is in use, includes the server's cookies in each format entry.
+        res.json({
+          id: info.id,
+          title: info.title,
+          uploader: info.uploader,
+          channel: info.channel,
+          duration: info.duration,
+          view_count: info.view_count,
+          upload_date: info.upload_date,
+          thumbnail: info.thumbnail,
+          description: typeof info.description === 'string' ? info.description.slice(0, 200) : undefined,
+          webpage_url: info.webpage_url,
+          extractor: info.extractor_key
+        });
       } catch (e) {
         res.status(500).json({ error: 'Failed to parse metadata' });
       }
     } else {
       console.error(`[yt-dlp info error] Code ${code}:`, stderr);
-      res.status(500).json({ error: stderr || 'Error analyzing URL' });
+      res.status(500).json({ error: sanitizeYtdlpError(stderr) || 'Error analyzing URL' });
     }
   });
 });
@@ -561,6 +581,7 @@ app.post('/api/download', checkAuth, async (req, res) => {
 
   args.push(
     '--no-playlist',
+    '--no-mtime', // an old upload-date mtime would make the cleaner delete the file within minutes
     '--newline',
     '--max-filesize', process.env.MAX_DOWNLOAD_SIZE || '2G',
     '--print-to-file', 'after_move:filepath', pathFile
@@ -660,13 +681,6 @@ app.post('/api/download', checkAuth, async (req, res) => {
     }
   });
 
-  // Last meaningful stderr line, without server paths, for the client.
-  const clientError = () => {
-    const lines = stderr.trim().split('\n');
-    const line = lines.filter(l => /ERROR/.test(l)).pop() || lines.pop() || 'Download failed';
-    return line.replace(/\/[^\s'"]*/g, '<path>').replace(/[A-Za-z]:\\[^\s'"]*/g, '<path>').slice(0, 300);
-  };
-
   const fail = (message) => {
     responded = true;
     releaseDownloadSlot();
@@ -687,7 +701,7 @@ app.post('/api/download', checkAuth, async (req, res) => {
 
     if (code !== 0) {
       console.error(`[Download Error] yt-dlp failed (code ${code}):`, stderr);
-      return fail(clientError());
+      return fail(sanitizeYtdlpError(stderr) || 'Download failed');
     }
 
     try {
@@ -728,6 +742,9 @@ app.post('/api/download', checkAuth, async (req, res) => {
         publishedPath = resolveUniqueDestination(downloadsDir, path.basename(finalPath), finalPath);
         moveFileSafely(finalPath, publishedPath);
       }
+      // The cleaner ages files by mtime; start the 60-minute window now.
+      const now = new Date();
+      fs.utimesSync(publishedPath, now, now);
       removeJobDir();
 
       responded = true;
