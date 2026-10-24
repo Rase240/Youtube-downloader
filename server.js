@@ -46,24 +46,65 @@ if (APP_PASSWORD === 'download123') {
   process.exit(1);
 }
 
-// Session token management: map of token -> { createdAt }
-// Tokens are random hex strings, NOT the password itself
+// Session token management: map of sha256(token) -> { createdAt }
+// Tokens are random hex strings, NOT the password itself. Only their hashes are kept, and they are
+// saved to disk so a restart doesn't log everyone out. Changing APP_PASSWORD invalidates them.
 const activeSessions = new Map();
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+const sessionsFile = process.env.SESSIONS_FILE || path.join(__dirname, '.sessions.json');
+const secretFor = (purpose) => crypto.createHmac('sha256', APP_PASSWORD).update(purpose).digest();
+const passwordCheck = secretFor('sessions-file').toString('hex');
+const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
+
+try {
+  const saved = JSON.parse(fs.readFileSync(sessionsFile, 'utf8'));
+  if (saved.passwordCheck === passwordCheck) {
+    for (const [h, createdAt] of Object.entries(saved.sessions || {})) {
+      if (Date.now() - createdAt < SESSION_MAX_AGE) activeSessions.set(h, { createdAt });
+    }
+  }
+} catch (e) { }
+
+function saveSessions() {
+  const sessions = {};
+  for (const [h, s] of activeSessions) sessions[h] = s.createdAt;
+  try {
+    fs.writeFileSync(sessionsFile, JSON.stringify({ passwordCheck, sessions }), { mode: 0o600 });
+  } catch (e) {
+    console.warn('[Sessions] Could not persist sessions:', e.message);
+  }
+}
 
 function generateSessionToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
 function isValidSession(token) {
-  if (!token) return false;
-  const session = activeSessions.get(token);
+  if (!token || typeof token !== 'string') return false;
+  const h = hashToken(token);
+  const session = activeSessions.get(h);
   if (!session) return false;
   if (Date.now() - session.createdAt > SESSION_MAX_AGE) {
-    activeSessions.delete(token);
+    activeSessions.delete(h);
+    saveSessions();
     return false;
   }
   return true;
+}
+
+// Signed, expiring per-file links, so the session token never has to appear in a URL.
+const fileLinkKey = secretFor('file-links');
+const FILE_LINK_TTL = 60 * 60 * 1000; // matches the 60-minute download retention
+function signFileLink(filename) {
+  const exp = Date.now() + FILE_LINK_TTL;
+  const sig = crypto.createHmac('sha256', fileLinkKey).update(`${filename}|${exp}`).digest('hex');
+  return `/api/file/${encodeURIComponent(filename)}?exp=${exp}&sig=${sig}`;
+}
+function isValidFileLink(filename, exp, sig) {
+  if (typeof exp !== 'string' || typeof sig !== 'string' || !/^[0-9a-f]{64}$/.test(sig)) return false;
+  if (!(Number(exp) > Date.now())) return false;
+  const expected = crypto.createHmac('sha256', fileLinkKey).update(`${filename}|${exp}`).digest();
+  return crypto.timingSafeEqual(expected, Buffer.from(sig, 'hex'));
 }
 
 // Brute-force rate limiter: max 5 failed attempts per IP per 15 minutes
@@ -99,11 +140,12 @@ function clearFailedAttempts(ip) {
 // Cleanup expired sessions and stale rate limit records every hour
 setInterval(() => {
   const now = Date.now();
-  for (const [token, session] of activeSessions) {
+  for (const [h, session] of activeSessions) {
     if (now - session.createdAt > SESSION_MAX_AGE) {
-      activeSessions.delete(token);
+      activeSessions.delete(h);
     }
   }
+  saveSessions();
   for (const [ip, record] of loginAttempts) {
     record.timestamps = record.timestamps.filter(t => now - t < ATTEMPT_WINDOW);
     if (record.timestamps.length === 0) {
@@ -288,7 +330,7 @@ function checkAuth(req, res, next) {
   if (!APP_PASSWORD || APP_PASSWORD.trim().length === 0) {
     return next(); // Auth disabled
   }
-  const token = req.headers['x-access-token'] || req.query.token;
+  const token = req.headers['x-access-token'];
   if (token && isValidSession(token)) {
     return next();
   }
@@ -351,7 +393,8 @@ app.post('/api/auth/verify', (req, res) => {
       )) {
     clearFailedAttempts(clientIp);
     const sessionToken = generateSessionToken();
-    activeSessions.set(sessionToken, { createdAt: Date.now() });
+    activeSessions.set(hashToken(sessionToken), { createdAt: Date.now() });
+    saveSessions();
     return res.json({ success: true, token: sessionToken });
   }
 
@@ -615,12 +658,17 @@ app.post('/api/download', checkAuth, async (req, res) => {
     }
   }, 12 * 60 * 1000);
 
+  // Set once yt-dlp has exited and ffmpeg post-processing runs. Those ffmpeg processes can't be
+  // killed from here, so the job keeps its slot and cleans up after itself when it finishes.
+  let postProcessing = false;
+
   // Clean up if client disconnects before completion
   res.on('close', () => {
     if (!responded) {
       responded = true;
       cleanupHeartbeat();
       clearTimeout(downloadTimer);
+      if (postProcessing) return;
       releaseDownloadSlot();
       abortJob();
     }
@@ -682,9 +730,11 @@ app.post('/api/download', checkAuth, async (req, res) => {
   });
 
   const fail = (message) => {
+    const clientGone = responded;
     responded = true;
     releaseDownloadSlot();
     removeJobDir();
+    if (clientGone) return;
     if (isStreamRequested) {
       sendEvent({ stage: 'error', error: message });
       res.end();
@@ -704,6 +754,7 @@ app.post('/api/download', checkAuth, async (req, res) => {
       return fail(sanitizeYtdlpError(stderr) || 'Download failed');
     }
 
+    postProcessing = true;
     try {
       // Exit code 0 is not proof of success: confirm the exact file yt-dlp reported exists and is non-empty.
       let producedPath = '';
@@ -747,10 +798,16 @@ app.post('/api/download', checkAuth, async (req, res) => {
       fs.utimesSync(publishedPath, now, now);
       removeJobDir();
 
+      if (responded) {
+        // Client left during post-processing: nobody will fetch this file.
+        releaseDownloadSlot();
+        try { fs.unlinkSync(publishedPath); } catch (e) { }
+        return;
+      }
       responded = true;
       releaseDownloadSlot();
       const filename = path.basename(publishedPath);
-      const downloadUrl = `/api/file/${encodeURIComponent(filename)}`;
+      const downloadUrl = signFileLink(filename);
 
       if (isStreamRequested) {
         sendEvent({ stage: 'complete', status: 'Ready to save', percent: 100, success: true, filename, downloadUrl });
@@ -766,7 +823,17 @@ app.post('/api/download', checkAuth, async (req, res) => {
 });
 
 // File Stream Download Route (Protected)
-app.get('/api/file/:filename', checkAuth, (req, res) => {
+// Accepts a signed link (what the UI now uses), the session header, or the legacy ?token= query
+// that APKs built before this change still send. Drop the legacy branch once the app is rebuilt.
+function checkFileAuth(req, res, next) {
+  if (!APP_PASSWORD) return next();
+  if (isValidFileLink(req.params.filename, req.query.exp, req.query.sig)) return next();
+  const token = req.headers['x-access-token'] || req.query.token;
+  if (isValidSession(token)) return next();
+  return res.status(401).json({ error: 'Unauthorized: Invalid or expired link' });
+}
+
+app.get('/api/file/:filename', checkFileAuth, (req, res) => {
   // Prevent path traversal: only allow a bare filename with no separators,
   // and resolve+verify it stays inside downloadsDir.
   const requested = req.params.filename;
@@ -945,7 +1012,7 @@ app.post('/api/obfuscate-upload', checkAuth, (req, res) => {
         success: true,
         filename: result.filename,
         sizeFormatted: result.sizeFormatted,
-        downloadUrl: `/api/file/${encodeURIComponent(result.filename)}`
+        downloadUrl: signFileLink(result.filename)
       });
     } catch (procErr) {
       cleanupTemp();
@@ -959,7 +1026,26 @@ app.post('/api/obfuscate-upload', checkAuth, (req, res) => {
 
 
 
+// Startup dependency check: a missing or outdated yt-dlp otherwise only shows up as failed downloads.
+function checkDependencies() {
+  const bin = fs.existsSync(ytdlpPath) ? ytdlpPath : 'yt-dlp';
+  const ytdlp = spawn(bin, ['--version']);
+  let out = '';
+  ytdlp.stdout.on('data', (d) => { out += d.toString(); });
+  ytdlp.on('error', () => console.error('⚠️ yt-dlp not found on PATH. Downloads will fail until it is installed.'));
+  ytdlp.on('close', (code) => {
+    if (code !== 0) return;
+    const version = out.trim();
+    console.log(`yt-dlp ${version}`);
+    // --js-runtimes (used for YouTube) was added in 2025.11.12
+    if (version < '2025.11.12') console.error('⚠️ yt-dlp is too old for --js-runtimes. Update it: yt-dlp -U');
+  });
+  const ff = spawn(ffmpegBin, ['-version']);
+  ff.on('error', () => console.error('⚠️ ffmpeg not found. Merging, MP3 conversion and iOS optimisation will fail.'));
+}
+
 app.listen(PORT, HOST, () => {
+  checkDependencies();
   console.log(`\n======================================================`);
   console.log(`🚀 YT Downloader Pro Server running on http://${HOST}:${PORT}`);
   if (APP_PASSWORD && APP_PASSWORD.trim().length > 0) {

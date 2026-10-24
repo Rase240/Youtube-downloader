@@ -562,8 +562,7 @@ if (!window.api) {
 
           if (completedData && completedData.downloadUrl) {
             window.api._notifyProgress({ status: 'Downloading file to your device...', percent: 100 });
-            const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
-            const fullDownloadUrl = `${host}${completedData.downloadUrl}${tokenQuery}`;
+            const fullDownloadUrl = `${host}${completedData.downloadUrl}`;
             const filename = completedData.filename || 'download.mp4';
             const mimeType = (filename.endsWith('.mp3') || (opts && opts.type === 'audio')) ? 'audio/mpeg' : 'video/mp4';
 
@@ -585,8 +584,7 @@ if (!window.api) {
         if (data.success && data.downloadUrl) {
           window.api._notifyProgress({ status: 'Downloading file to your device...', percent: 100 });
           
-          const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
-          const fullDownloadUrl = `${host}${data.downloadUrl}${tokenQuery}`;
+          const fullDownloadUrl = `${host}${data.downloadUrl}`;
           const filename = data.filename || 'download.mp4';
           const mimeType = (filename.endsWith('.mp3') || (opts && opts.type === 'audio')) ? 'audio/mpeg' : 'video/mp4';
 
@@ -1204,9 +1202,7 @@ function renderHistory() {
       triggerHaptic(20);
       if (item.downloadUrl) {
         const host = getApiHost();
-        const token = getStoredAuthToken();
-        const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-        const fullUrl = `${host}${item.downloadUrl}${tokenParam}`;
+        const fullUrl = `${host}${item.downloadUrl}`;
         const filename = item.filename || `${item.title || 'media_file'}.mp4`;
         const mimeType = item.type === 'audio' ? 'audio/mpeg' : 'video/mp4';
         triggerDeviceDownload(fullUrl, filename, mimeType);
@@ -1722,9 +1718,7 @@ function showObfComplete(result, hostUrl = '') {
   if (obfDownloadBtn) {
     if (result.downloadUrl) {
       obfDownloadBtn.classList.remove('hidden');
-      const token = getStoredAuthToken();
-      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-      const fullUrl = `${hostUrl || getApiHost()}${result.downloadUrl}${tokenParam}`;
+      const fullUrl = `${hostUrl || getApiHost()}${result.downloadUrl}`;
       obfDownloadBtn.onclick = () => {
         const filename = result.filename || 'obfuscated_media.mp4';
         triggerDeviceDownload(fullUrl, filename, 'video/mp4');

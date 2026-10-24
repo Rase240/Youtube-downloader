@@ -66,7 +66,17 @@ and a certificate (e.g. `certbot --nginx`). In the EC2 security group open only 
 git log --oneline -5 && git checkout <previous-commit> && sudo systemctl restart ytdl
 ```
 
-## Secrets to rotate
+## Server state files
 
-`android/app/release.keystore` and its passwords in `android/app/build.gradle` are committed to Git history.
-Treat that signing key as exposed: generate a new one, keep it and its passwords out of the repo (read from `~/.gradle/gradle.properties`), and rebuild the APK.
+- `.sessions.json` keeps hashed login sessions so restarts don't log you out (git-ignored, mode 600).
+  Changing `APP_PASSWORD` invalidates every saved session. Override the path with `SESSIONS_FILE`.
+- File links returned by `/api/download` are signed and expire after 60 minutes, matching file retention.
+
+## Android signing
+
+The old `release.keystore` (and its passwords) was public in Git history and is no longer used.
+Release builds now sign with `android/app/ytdl-release.jks`, configured by `android/keystore.properties`.
+Both are git-ignored. **Back both up somewhere safe (password manager / offline):** without them you
+can't publish updates that install over the existing app.
+
+Because the signing key changed, uninstall the old app on your phone before installing a newly built APK.

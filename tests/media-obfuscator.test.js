@@ -267,7 +267,10 @@ describe('Local Media Obfuscator - Comprehensive Suite', () => {
 
     before(async () => {
       // Start express server in a child process with TEST_PORT and APP_PASSWORD
-      const env = { ...process.env, PORT: String(TEST_PORT), APP_PASSWORD: 'testpassword123' };
+      const env = {
+        ...process.env, PORT: String(TEST_PORT), APP_PASSWORD: 'testpassword123',
+        SESSIONS_FILE: path.join(require('os').tmpdir(), `ytdl-test-sessions-${process.pid}.json`)
+      };
       serverProcess = require('child_process').spawn('node', ['server.js'], { env, cwd: path.join(__dirname, '..') });
 
       // Wait for server to start
